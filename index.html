@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <title>DockingSim.JS | NASA-JPL Orbital Interface</title>
+    <meta name="title" content="DockingSim.JS | NASA-JPL Orbital Interface">
+    <meta name="description" content="Manual docking sequence training simulator. Authorized Personnel Only. Inspired by STS-114 UDD systems.">
+    <meta name="theme-color" content="#00ff41">
+
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://yourdomain.com/">
+    <meta property="og:title" content="🚀 DockingSim.JS: Orbital Command">
+    <meta property="og:description" content="Master the art of orbital proximity operations. High-fidelity vector docking simulation inspired by NASA's STS-114 mission protocols.">
+    <meta property="og:image" content="https://upload.wikimedia.org/wikipedia/commons/e/e5/NASA_logo.svg">
+
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:title" content="DockingSim.JS | Vector Flight Systems">
+    <meta property="twitter:description" content="Execute precision docking maneuvers in a retro-vector environment. Built for the next generation of space pioneers.">
+    <meta property="twitter:image" content="https://upload.wikimedia.org/wikipedia/commons/4/42/NASA_JPL_logo.svg">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <style>
+        :root {
+            --nasa-blue: #0b3d91;
+            --vector-green: #00ff41;
+            --dark-bg: #050a05;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            background-color: var(--dark-bg);
+            color: var(--vector-green);
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            height: 100%;
+        }
+
+        /* CRT Glow Effect */
+        .crt-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), 
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        #loader-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            transition: opacity 1.5s ease-out;
+        }
+
+        .logo-header {
+            display: flex;
+            gap: 40px;
+            margin-bottom: 30px;
+            filter: drop-shadow(0 0 10px var(--vector-green));
+        }
+
+        .logo-header img {
+            height: 80px;
+            opacity: 0.8;
+        }
+
+        #wireframe-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: -1;
+            opacity: 0.3;
+        }
+
+        .status-box {
+            border: 1px solid var(--vector-green);
+            padding: 20px;
+            width: 400px;
+            background: rgba(0, 40, 0, 0.2);
+            box-shadow: 0 0 15px rgba(0, 255, 65, 0.2);
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 10px;
+            border: 1px solid var(--vector-green);
+            margin-top: 15px;
+            position: relative;
+        }
+
+        #progress-fill {
+            width: 0%;
+            height: 100%;
+            background: var(--vector-green);
+            box-shadow: 0 0 10px var(--vector-green);
+        }
+
+        .terminal-text {
+            font-size: 0.8rem;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+
+        #start-btn {
+            background: transparent;
+            color: var(--vector-green);
+            border: 1px solid var(--vector-green);
+            padding: 10px 20px;
+            cursor: pointer;
+            font-family: inherit;
+            margin-top: 20px;
+            letter-spacing: 2px;
+            font-weight: bold;
+            transition: 0.3s;
+        }
+
+        #start-btn:hover {
+            background: var(--vector-green);
+            color: black;
+            box-shadow: 0 0 20px var(--vector-green);
+        }
+    </style>
+</head>
+<body>
+
+<div class="crt-overlay"></div>
+<canvas id="wireframe-canvas"></canvas>
+
+<div id="loader-container">
+    <div class="logo-header">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/e/e5/NASA_logo.svg" alt="NASA">
+        <img src="https://upload.wikimedia.org/wikipedia/commons/4/42/NASA_JPL_logo.svg" alt="JPL">
+    </div>
+
+    <div class="status-box" id="main-ui" style="display:none;">
+        <div class="terminal-text" id="log">INITIALIZING STS-114 UDD PROTOCOLS...</div>
+        <div class="progress-bar">
+            <div id="progress-fill"></div>
+        </div>
+        <div class="terminal-text" style="margin-top:10px; text-align:right;" id="percent">0%</div>
+    </div>
+
+    <button id="start-btn">INITIATE BOOT SEQUENCE</button>
+</div>
+
+<audio id="beep-sound" src="https://actions.google.com/sounds/v1/science_fiction/glitch_low_beeps.ogg"></audio>
+
+<script>
+    const canvas = document.getElementById('wireframe-canvas');
+    const ctx = canvas.getContext('2d');
+    let width, height;
+
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    let offset = 0;
+    function drawGrid() {
+        ctx.clearRect(0, 0, width, height);
+        ctx.strokeStyle = '#00ff41';
+        ctx.lineWidth = 1;
+        
+        for(let i = -10; i <= 10; i++) {
+            ctx.beginPath();
+            ctx.moveTo(width/2 + (i * 100), 0);
+            ctx.lineTo(width/2 + (i * 300), height);
+            ctx.stroke();
+        }
+        
+        offset += 2;
+        if (offset > 100) offset = 0;
+        for(let i = 0; i < height; i += 50) {
+            ctx.beginPath();
+            ctx.moveTo(0, i + offset);
+            ctx.lineTo(width, i + offset);
+            ctx.stroke();
+        }
+        requestAnimationFrame(drawGrid);
+    }
+    drawGrid();
+
+    $('#start-btn').click(function() {
+        $(this).hide();
+        $('#main-ui').show();
+        document.getElementById('beep-sound').play();
+        startLoading();
+    });
+
+    function startLoading() {
+        let progress = 0;
+        const logs = [
+            "Establishing Houston Uplink...",
+            "Syncing STS-114 Telemetry...",
+            "Loading Vector Rendering Engine...",
+            "Handshake with ISS established.",
+            "Ready for Proximity Ops."
+        ];
+
+        let interval = setInterval(() => {
+            progress += Math.random() * 5;
+            if (progress >= 100) {
+                progress = 100;
+                clearInterval(interval);
+                $('#log').text("SYSTEM READY. COMMENCING DOCKING...");
+                setTimeout(() => {
+                    $('#loader-container').css('opacity', '0');
+                    setTimeout(() => {
+                        window.location.href = "/pages/simulators/DockingSim1/Levels";
+                    }, 1500);
+                }, 1000);
+            }
+
+            $('#progress-fill').css('width', progress + '%');
+            $('#percent').text(Math.floor(progress) + '%');
+            
+            if(Math.floor(progress) % 20 === 0) {
+                $('#log').text(logs[Math.floor(progress/21)] || logs[logs.length-1]);
+            }
+        }, 120);
+    }
+</script>
+
+</body>
+</html>
