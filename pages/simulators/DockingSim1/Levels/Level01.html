@@ -11,6 +11,7 @@
       - Magnetic capture latch simulation.
       - Side view indicator lines + thruster indicators.
       - FPV live curved trajectory line from center to probe.
+      - Star field background + ISS-style satellite visual (ported from Level 2).
     -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -206,7 +207,7 @@
     <div id="controls-hint">
         <b>[V]</b> CYCLE VIEW | <b>[T]</b> SWITCH INPUT | <b>[SPACE]</b> RCS NULL-VELOCITY (BRAKE)<br>
         <b>FPV:</b> WASD (X/Y Translation) | Q/E (Z Translation) <br>
-        <b>SIDE:</b> W/S (Y-Axis) | A/D (Z-Axis) | <b>DOCKING REQ:</b> VEL &lt; 0.25 | DEV &lt; 0.60
+        <b>SIDE:</b> W/S (Y-Axis) | A/D (Z-Axis) | <b>DOCKING REQ:</b> VEL &lt; 0.25 | DEV &lt; 0.20
     </div>
 
     <script>
@@ -245,6 +246,30 @@
         const keys = {};
         const mouse = { x: 0, y: 0, inBounds: false };
 
+        // ── STAR FIELD (from Level 2) ──────────────────
+        let stars = null;
+        function initStars() {
+            stars = [];
+            for (let i = 0; i < 220; i++) {
+                stars.push({
+                    x: Math.random() * 2 - 1,
+                    y: Math.random() * 2 - 1,
+                    sz: Math.random(),
+                    b: 0.25 + Math.random() * 0.75
+                });
+            }
+        }
+        function drawStars(cx, cy) {
+            if (!stars) initStars();
+            for (const s of stars) {
+                const sx = cx + s.x * canvas.width  * 0.62;
+                const sy = cy + s.y * canvas.height * 0.62;
+                const r  = s.sz * 1.4;
+                ctx.fillStyle = `rgba(200,220,255,${s.b * 0.38})`;
+                ctx.fillRect(sx, sy, r, r);
+            }
+        }
+
         // ─────────────────────────────────────────────
         // AUDIO ENGINE
         // ─────────────────────────────────────────────
@@ -261,7 +286,6 @@
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             const noiseBuffer = createNoiseBuffer();
 
-            // Cabin Ambience - deep low rumble
             const ambientNoise = audioCtx.createBufferSource();
             ambientNoise.buffer = noiseBuffer;
             ambientNoise.loop = true;
@@ -275,7 +299,6 @@
             ambientAirGain.connect(audioCtx.destination);
             ambientNoise.start();
 
-            // Proximity hiss - gets louder as target nears
             const proximityNoise = audioCtx.createBufferSource();
             proximityNoise.buffer = noiseBuffer;
             proximityNoise.loop = true;
@@ -289,7 +312,6 @@
             proximityAirGain.connect(audioCtx.destination);
             proximityNoise.start();
 
-            // Thruster jet noise
             const thrusterNoiseSource = audioCtx.createBufferSource();
             thrusterNoiseSource.buffer = noiseBuffer;
             thrusterNoiseSource.loop = true;
@@ -316,11 +338,9 @@
             thrusterGain.gain.setTargetAtTime(active ? 0.4 : 0, audioCtx.currentTime, 0.03);
         }
 
-        // COLLISION SOUND - explosion burst + metal creak
         function playCollisionSound() {
             if (!audioCtx) return;
             const t = audioCtx.currentTime;
-
             const expBuf = createNoiseBuffer();
             const expSrc = audioCtx.createBufferSource();
             expSrc.buffer = expBuf;
@@ -331,11 +351,8 @@
             const expGain = audioCtx.createGain();
             expGain.gain.setValueAtTime(1.5, t);
             expGain.gain.exponentialRampToValueAtTime(0.001, t + 1.0);
-            expSrc.connect(expFilter);
-            expFilter.connect(expGain);
-            expGain.connect(audioCtx.destination);
-            expSrc.start(t);
-            expSrc.stop(t + 1.0);
+            expSrc.connect(expFilter); expFilter.connect(expGain); expGain.connect(audioCtx.destination);
+            expSrc.start(t); expSrc.stop(t + 1.0);
 
             function metalCreak(startT, freq, dur) {
                 const osc = audioCtx.createOscillator();
@@ -350,18 +367,13 @@
                 lfoGain.gain.setValueAtTime(freq * 0.08, startT);
                 oscGain.gain.setValueAtTime(0.25, startT);
                 oscGain.gain.exponentialRampToValueAtTime(0.001, startT + dur);
-                lfo.connect(lfoGain);
-                lfoGain.connect(osc.frequency);
-                osc.connect(oscGain);
-                oscGain.connect(audioCtx.destination);
+                lfo.connect(lfoGain); lfoGain.connect(osc.frequency);
+                osc.connect(oscGain); oscGain.connect(audioCtx.destination);
                 lfo.start(startT); osc.start(startT);
                 lfo.stop(startT + dur); osc.stop(startT + dur);
             }
-
-            metalCreak(t + 0.15, 180, 1.2);
-            metalCreak(t + 0.35, 130, 1.8);
-            metalCreak(t + 0.60, 95, 2.2);
-            metalCreak(t + 1.00, 70, 1.5);
+            metalCreak(t + 0.15, 180, 1.2); metalCreak(t + 0.35, 130, 1.8);
+            metalCreak(t + 0.60, 95,  2.2); metalCreak(t + 1.00, 70,  1.5);
 
             const thudOsc = audioCtx.createOscillator();
             thudOsc.type = 'sine';
@@ -370,37 +382,29 @@
             const thudGain = audioCtx.createGain();
             thudGain.gain.setValueAtTime(1.0, t);
             thudGain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
-            thudOsc.connect(thudGain);
-            thudGain.connect(audioCtx.destination);
+            thudOsc.connect(thudGain); thudGain.connect(audioCtx.destination);
             thudOsc.start(t); thudOsc.stop(t + 0.3);
         }
 
-        // DOCKING SUCCESS SOUND
         function playDockingSound() {
             if (!audioCtx) return;
             const t = audioCtx.currentTime;
-
             function metalClank(startT, freq, dur, vol) {
                 const osc1 = audioCtx.createOscillator();
                 const osc2 = audioCtx.createOscillator();
                 const g = audioCtx.createGain();
-                osc1.type = 'square';
-                osc2.type = 'sawtooth';
+                osc1.type = 'square'; osc2.type = 'sawtooth';
                 osc1.frequency.setValueAtTime(freq, startT);
                 osc1.frequency.exponentialRampToValueAtTime(freq * 0.5, startT + dur);
                 osc2.frequency.setValueAtTime(freq * 1.5, startT);
                 osc2.frequency.exponentialRampToValueAtTime(freq * 0.8, startT + dur);
                 g.gain.setValueAtTime(vol, startT);
                 g.gain.exponentialRampToValueAtTime(0.001, startT + dur);
-                osc1.connect(g); osc2.connect(g);
-                g.connect(audioCtx.destination);
+                osc1.connect(g); osc2.connect(g); g.connect(audioCtx.destination);
                 osc1.start(startT); osc2.start(startT);
                 osc1.stop(startT + dur); osc2.stop(startT + dur);
             }
-
-            metalClank(t,        320, 0.6, 0.9);
-            metalClank(t + 0.05, 240, 0.4, 0.5);
-            metalClank(t + 0.12, 180, 0.3, 0.3);
+            metalClank(t, 320, 0.6, 0.9); metalClank(t + 0.05, 240, 0.4, 0.5); metalClank(t + 0.12, 180, 0.3, 0.3);
 
             const latchOsc = audioCtx.createOscillator();
             latchOsc.type = 'square';
@@ -409,8 +413,7 @@
             const latchGain = audioCtx.createGain();
             latchGain.gain.setValueAtTime(0.4, t + 0.4);
             latchGain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
-            latchOsc.connect(latchGain);
-            latchGain.connect(audioCtx.destination);
+            latchOsc.connect(latchGain); latchGain.connect(audioCtx.destination);
             latchOsc.start(t + 0.4); latchOsc.stop(t + 0.5);
 
             const airBuf = createNoiseBuffer();
@@ -425,11 +428,8 @@
             airGain.gain.setValueAtTime(0, t + 0.6);
             airGain.gain.linearRampToValueAtTime(0.3, t + 1.2);
             airGain.gain.exponentialRampToValueAtTime(0.001, t + 3.5);
-            airSrc.connect(airFilt);
-            airFilt.connect(airGain);
-            airGain.connect(audioCtx.destination);
-            airSrc.start(t + 0.6);
-            airSrc.stop(t + 3.5);
+            airSrc.connect(airFilt); airFilt.connect(airGain); airGain.connect(audioCtx.destination);
+            airSrc.start(t + 0.6); airSrc.stop(t + 3.5);
 
             const humOsc = audioCtx.createOscillator();
             humOsc.type = 'sine';
@@ -439,8 +439,7 @@
             humGain.gain.setValueAtTime(0, t + 0.8);
             humGain.gain.linearRampToValueAtTime(0.2, t + 1.5);
             humGain.gain.exponentialRampToValueAtTime(0.001, t + 3.0);
-            humOsc.connect(humGain);
-            humGain.connect(audioCtx.destination);
+            humOsc.connect(humGain); humGain.connect(audioCtx.destination);
             humOsc.start(t + 0.8); humOsc.stop(t + 3.0);
         }
 
@@ -598,9 +597,10 @@
             const cy = canvas.height / 2;
 
             if (state.viewMode === 'FPV') {
+                drawStars(cx, cy);                  // ← Level 2 star field
                 drawGridFPV(cx, cy);
-                drawCenterAlignGuide(cx, cy);   // ← static guide square, drawn BEFORE station so it sits behind
-                drawStationFPV(cx, cy);
+                drawCenterAlignGuide(cx, cy);
+                drawStationFPV(cx, cy);             // ← Level 2 ISS-style satellite
                 drawTrajectoryLine(cx, cy);
                 drawHUD(cx, cy);
                 drawThrusterFeedback(cx, cy);
@@ -620,51 +620,39 @@
         }
 
         // ─────────────────────────────────────────────
-        // CENTER ALIGNMENT GUIDE SQUARE (FPV only)
-        // A static semi-transparent white square fixed to the exact screen
-        // center. The pilot must manoeuvre the docking port (station target)
-        // into this box to achieve perfect centre alignment before final approach.
+        // CENTER ALIGNMENT GUIDE SQUARE
         // ─────────────────────────────────────────────
         function drawCenterAlignGuide(cx, cy) {
             const h = GUIDE_SQUARE_HALF;
 
-            // Filled semi-transparent white interior
             ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
             ctx.fillRect(cx - h, cy - h, h * 2, h * 2);
 
-            // Solid white border
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
             ctx.lineWidth = 1.5;
             ctx.strokeRect(cx - h, cy - h, h * 2, h * 2);
 
-            // Corner tick marks (slightly longer than main border to stand out)
             const tick = 10;
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.70)';
             ctx.lineWidth = 1.5;
-            // Top-left
             ctx.beginPath();
             ctx.moveTo(cx - h, cy - h + tick); ctx.lineTo(cx - h, cy - h); ctx.lineTo(cx - h + tick, cy - h);
             ctx.stroke();
-            // Top-right
             ctx.beginPath();
             ctx.moveTo(cx + h - tick, cy - h); ctx.lineTo(cx + h, cy - h); ctx.lineTo(cx + h, cy - h + tick);
             ctx.stroke();
-            // Bottom-left
             ctx.beginPath();
             ctx.moveTo(cx - h, cy + h - tick); ctx.lineTo(cx - h, cy + h); ctx.lineTo(cx - h + tick, cy + h);
             ctx.stroke();
-            // Bottom-right
             ctx.beginPath();
             ctx.moveTo(cx + h - tick, cy + h); ctx.lineTo(cx + h, cy + h); ctx.lineTo(cx + h, cy + h - tick);
             ctx.stroke();
 
-            // Small centre crosshair dot
             ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
             ctx.beginPath();
             ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
             ctx.fill();
 
-            // Label
             ctx.fillStyle = 'rgba(255, 255, 255, 0.30)';
             ctx.font = '9px Courier New';
             ctx.textAlign = 'center';
@@ -672,12 +660,18 @@
             ctx.textAlign = 'left';
         }
 
+        // ─────────────────────────────────────────────
+        // ISS-STYLE STATION (ported from Level 2)
+        // Replaces the bare octagon — same position / scale logic as before,
+        // but now draws the full satellite body with solar panels + collar lights
+        // ─────────────────────────────────────────────
         function drawStationFPV(cx, cy) {
-            const z = Math.max(0.1, state.pos.z);
+            const z     = Math.max(0.1, state.pos.z);
             const scale = 3500 / (z + 8);
-            const ox = state.pos.x * scale, oy = -state.pos.y * scale;
+            const ox    = state.pos.x * scale;
+            const oy    = -state.pos.y * scale;
 
-            // Approach corridor boxes
+            // Approach corridor boxes (unchanged)
             ctx.strokeStyle = 'rgba(0, 255, 65, 0.1)';
             ctx.lineWidth = 1;
             for (let i = 1; i <= 3; i++) {
@@ -685,33 +679,83 @@
                 ctx.strokeRect(cx + (state.pos.x * s) - s * 2, cy + (-state.pos.y * s) - s * 2, s * 4, s * 4);
             }
 
-            // Octagonal docking port
-            ctx.strokeStyle = 'var(--neon-green)';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
             const r = scale * 4.5;
+
+            ctx.save();
+            ctx.translate(cx + ox, cy + oy);
+
+            // ── Solar panels (counter-rotated so they stay horizontal) ──
+            ctx.strokeStyle = 'rgba(80, 120, 200, 0.75)';
+            ctx.fillStyle   = 'rgba(20, 40, 90, 0.55)';
+            ctx.lineWidth   = 1.2;
+            const pw = r * 0.95, ph = r * 0.14;
+            // Left panel
+            ctx.fillRect(-r * 1.65, -ph / 2, pw, ph);
+            ctx.strokeRect(-r * 1.65, -ph / 2, pw, ph);
+            // Right panel
+            ctx.fillRect(r * 0.7, -ph / 2, pw, ph);
+            ctx.strokeRect(r * 0.7, -ph / 2, pw, ph);
+            // Panel cell lines
+            ctx.strokeStyle = 'rgba(60, 90, 160, 0.5)';
+            ctx.lineWidth = 0.5;
+            const cellCount = 5;
+            for (let c = 1; c < cellCount; c++) {
+                const lx1 = -r * 1.65 + (pw / cellCount) * c;
+                const lx2 =  r * 0.70 + (pw / cellCount) * c;
+                ctx.beginPath(); ctx.moveTo(lx1, -ph/2); ctx.lineTo(lx1, ph/2); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(lx2, -ph/2); ctx.lineTo(lx2, ph/2); ctx.stroke();
+            }
+
+            // ── Truss / main body ──
+            ctx.strokeStyle = 'rgba(0, 255, 65, 0.5)';
+            ctx.fillStyle   = 'rgba(0, 30, 0, 0.4)';
+            ctx.lineWidth   = 1;
+            const bw = r * 0.55, bh = r * 0.18;
+            ctx.fillRect(-bw / 2, -bh / 2, bw, bh);
+            ctx.strokeRect(-bw / 2, -bh / 2, bw, bh);
+
+            // ── Docking port octagon (same shape as original, now layered on ISS body) ──
+            const lateralErr = Math.sqrt(state.pos.x**2 + state.pos.y**2);
+            const isAligned  = lateralErr < ALIGN_TOLERANCE;
+            ctx.strokeStyle = isAligned ? '#ffffff' : 'var(--neon-green)';
+            ctx.lineWidth = isAligned ? 2.5 : 2;
+            ctx.beginPath();
             for (let a = 0; a <= 8; a++) {
                 const angle = (a / 8) * Math.PI * 2;
-                const vx = cx + ox + Math.cos(angle) * r;
-                const vy = cy + oy + Math.sin(angle) * r;
+                const vx = Math.cos(angle) * r;
+                const vy = Math.sin(angle) * r;
                 if (a === 0) ctx.moveTo(vx, vy); else ctx.lineTo(vx, vy);
             }
             ctx.stroke();
 
-            // Inner ring
-            ctx.beginPath(); ctx.arc(cx + ox, cy + oy, scale * 1.5, 0, Math.PI * 2); ctx.stroke();
+            // Inner probe port ring
+            ctx.strokeStyle = isAligned ? 'rgba(0, 229, 255, 0.9)' : 'rgba(0, 200, 50, 0.7)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath(); ctx.arc(0, 0, scale * 1.5, 0, Math.PI * 2); ctx.stroke();
 
-            // Guide corner lights (pulsing)
+            // Alignment tick marks on collar
+            ctx.strokeStyle = isAligned ? 'rgba(0, 229, 255, 0.8)' : 'rgba(255, 177, 0, 0.55)';
+            ctx.lineWidth = 1.5;
+            [[1,0],[-1,0],[0,1],[0,-1]].forEach(([nx, ny]) => {
+                ctx.beginPath();
+                ctx.moveTo(nx * r * 0.68, ny * r * 0.68);
+                ctx.lineTo(nx * r * 1.08, ny * r * 1.08);
+                ctx.stroke();
+            });
+
+            ctx.restore();
+
+            // ── Guide corner lights (pulsing) — same as original ──
             const pulse = (Math.sin(state.frame * 0.15) + 1) / 2;
             ctx.fillStyle = `rgba(255, 255, 255, ${pulse * 0.8})`;
             [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(p => {
                 ctx.beginPath();
-                ctx.arc(cx + ox + p[0] * scale * 3.8, cy + oy + p[1] * scale * 3.8, Math.max(1, scale * 0.2), 0, Math.PI * 2);
+                ctx.arc(cx + ox + p[0] * r * 0.93, cy + oy + p[1] * r * 0.93, Math.max(1, scale * 0.2), 0, Math.PI * 2);
                 ctx.fill();
             });
         }
 
-        // LIVE CURVED TRAJECTORY LINE from center screen to projected probe position
+        // LIVE CURVED TRAJECTORY LINE (unchanged)
         function drawTrajectoryLine(cx, cy) {
             const z = Math.max(0.1, state.pos.z);
             const scale = 3500 / (z + 8);
@@ -759,7 +803,6 @@
             const lateralErr = Math.sqrt(state.pos.x**2 + state.pos.y**2);
             const isAligned = lateralErr < ALIGN_TOLERANCE;
 
-            // Dynamic crosshair at docking port
             ctx.strokeStyle = isAligned ? '#fff' : 'var(--neon-green)';
             ctx.lineWidth = 1;
             ctx.beginPath();
@@ -793,7 +836,7 @@
             ctx.stroke();
         }
 
-        // FPV thruster indicators
+        // FPV thruster indicators (unchanged)
         function drawThrusterFeedback(cx, cy) {
             if (!state.active || state.fuel <= 0) return;
             const margin = 100;
@@ -835,7 +878,7 @@
         }
 
         // ─────────────────────────────────────────────
-        // SIDE VIEW
+        // SIDE VIEW (unchanged)
         // ─────────────────────────────────────────────
         function drawSideView(cx, cy) {
             const zoom = 5.0;
@@ -935,37 +978,29 @@
                 ctx.beginPath();
                 ctx.moveTo(-22, 15); ctx.lineTo(-17, 32); ctx.lineTo(-12, 15);
                 ctx.fill();
-                ctx.font = '8px Courier New';
-                ctx.fillStyle = '#fff';
-                ctx.fillText("RCS-BTM", -36, 42);
-                ctx.fillStyle = '#fff';
+                ctx.font = '8px Courier New'; ctx.fillStyle = '#fff';
+                ctx.fillText("RCS-BTM", -36, 42); ctx.fillStyle = '#fff';
             }
             if (keys['KeyS'] || keys['ArrowDown']) {
                 ctx.beginPath();
                 ctx.moveTo(-22, -15); ctx.lineTo(-17, -32); ctx.lineTo(-12, -15);
                 ctx.fill();
-                ctx.font = '8px Courier New';
-                ctx.fillStyle = '#fff';
-                ctx.fillText("RCS-TOP", -36, -36);
-                ctx.fillStyle = '#fff';
+                ctx.font = '8px Courier New'; ctx.fillStyle = '#fff';
+                ctx.fillText("RCS-TOP", -36, -36); ctx.fillStyle = '#fff';
             }
             if (keys['KeyD'] || keys['ArrowRight']) {
                 ctx.beginPath();
                 ctx.moveTo(-45, -8); ctx.lineTo(-65, 0); ctx.lineTo(-45, 8);
                 ctx.fill();
-                ctx.font = '8px Courier New';
-                ctx.fillStyle = '#fff';
-                ctx.fillText("RCS-AFT", -82, 3);
-                ctx.fillStyle = '#fff';
+                ctx.font = '8px Courier New'; ctx.fillStyle = '#fff';
+                ctx.fillText("RCS-AFT", -82, 3); ctx.fillStyle = '#fff';
             }
             if (keys['KeyA'] || keys['ArrowLeft']) {
                 ctx.beginPath();
                 ctx.moveTo(8, -5); ctx.lineTo(25, 0); ctx.lineTo(8, 5);
                 ctx.fill();
-                ctx.font = '8px Courier New';
-                ctx.fillStyle = '#fff';
-                ctx.fillText("RCS-FWD", 28, 3);
-                ctx.fillStyle = '#fff';
+                ctx.font = '8px Courier New'; ctx.fillStyle = '#fff';
+                ctx.fillText("RCS-FWD", 28, 3); ctx.fillStyle = '#fff';
             }
 
             ctx.restore();
