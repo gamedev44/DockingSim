@@ -108,6 +108,13 @@ git clone https://github.com/gamedev44/DockingSim.git
 
 
 ---
+# Screenshots
+
+<img width="850" height="554" alt="image" src="https://github.com/user-attachments/assets/69992c74-10fb-4323-8204-fa02c78cb86c" />
+
+<img width="801" height="520" alt="image" src="https://github.com/user-attachments/assets/38ae8d20-f476-46b4-a4f0-510722450a4d" />
+
+---
 
 **Author:** Asterisk
 
