@@ -6,18 +6,16 @@
     
     <title>DockingSim.JS | NASA-JPL Orbital Interface</title>
     <meta name="title" content="DockingSim.JS | NASA-JPL Orbital Interface">
-    <meta name="description" content="Manual docking sequence training simulator. Authorized Personnel Only. Inspired by STS-114 UDD systems.">
+    <meta name="description" content="Authorized Personnel Only. High-fidelity orbital docking simulator inspired by STS-114 mission protocols.">
     <meta name="theme-color" content="#00ff41">
 
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://yourdomain.com/">
-    <meta property="og:title" content="🚀 DockingSim.JS: Orbital Command">
-    <meta property="og:description" content="Master the art of orbital proximity operations. High-fidelity vector docking simulation inspired by NASA's STS-114 mission protocols.">
+    <meta property="og:title" content="🚀 DockingSim.JS | Orbital Command">
+    <meta property="og:description" content="Execute precision docking maneuvers in a phosphor-green vector environment. Developed for the next generation of pilots.">
     <meta property="og:image" content="https://upload.wikimedia.org/wikipedia/commons/e/e5/NASA_logo.svg">
 
     <meta property="twitter:card" content="summary_large_image">
     <meta property="twitter:title" content="DockingSim.JS | Vector Flight Systems">
-    <meta property="twitter:description" content="Execute precision docking maneuvers in a retro-vector environment. Built for the next generation of space pioneers.">
     <meta property="twitter:image" content="https://upload.wikimedia.org/wikipedia/commons/4/42/NASA_JPL_logo.svg">
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
@@ -191,7 +189,8 @@
     $('#start-btn').click(function() {
         $(this).hide();
         $('#main-ui').show();
-        document.getElementById('beep-sound').play();
+        const audio = document.getElementById('beep-sound');
+        if (audio) audio.play();
         startLoading();
     });
 
@@ -214,8 +213,9 @@
                 setTimeout(() => {
                     $('#loader-container').css('opacity', '0');
                     setTimeout(() => {
-                        window.location.href = "/pages/simulators/DockingSim1/Levels/Level01.html";
-                    }, 1500);
+                        // FIX: Using relative path for GitHub Pages compatibility
+                        window.location.href = "pages/simulators/DockingSim1/Levels/Level01.html";
+                    }, 1200);
                 }, 1000);
             }
 
