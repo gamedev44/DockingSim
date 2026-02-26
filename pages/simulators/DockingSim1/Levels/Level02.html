@@ -1,0 +1,983 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- 
+      NASA JPL Class-D Docking Simulator (1991 Research Variant)
+      SYSTEM OVERVIEW:
+      - Newton-Euler rigid body dynamics for 3-DOF translation.
+      - Dual-mode HUD (FPV/Side Profile).
+      - Predictive Trajectory Analysis (Live Debug Line).
+      - Full acoustic modeling: thrusters, proximity hiss, collision, docking.
+      - Magnetic capture latch simulation.
+      - Side view indicator lines + thruster indicators.
+      - FPV live curved trajectory line from center to probe.
+    -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NASA JPL Class-D Docking Sim 1991 Research Model</title>
+    <style>
+        :root {
+            --neon-green: #00ff41;
+            --dark-green: #003b00;
+            --bg-black: #050505;
+            --alert-red: #ff3333;
+            --hud-amber: #ffb100;
+            --phosphor-glow: rgba(0, 255, 65, 0.2);
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-black);
+            color: var(--neon-green);
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            user-select: none;
+        }
+
+        #ui-container {
+            position: relative;
+            width: 95vw;
+            max-width: 900px;
+            aspect-ratio: 16/9;
+            border: 4px solid #222;
+            border-radius: 10px;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 1), inset 0 0 100px rgba(0, 59, 0, 0.2);
+            background-color: #000;
+            overflow: hidden;
+            cursor: crosshair;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            image-rendering: crisp-edges;
+        }
+
+        .overlay {
+            position: absolute;
+            pointer-events: none;
+            text-transform: uppercase;
+            font-weight: bold;
+            letter-spacing: 1.5px;
+            text-shadow: 0 0 5px var(--neon-green);
+        }
+
+        #telemetry {
+            top: 25px;
+            left: 25px;
+            font-size: 14px;
+            line-height: 1.4;
+            background: rgba(0, 15, 0, 0.85);
+            padding: 12px;
+            border: 1px solid var(--dark-green);
+            z-index: 15;
+        }
+
+        #status {
+            top: 25px;
+            right: 25px;
+            text-align: right;
+            font-size: 14px;
+            line-height: 1.4;
+            background: rgba(0, 15, 0, 0.85);
+            padding: 12px;
+            border: 1px solid var(--dark-green);
+            z-index: 15;
+        }
+
+        .crt-scanline {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(
+                rgba(18, 16, 16, 0) 50%, 
+                rgba(0, 0, 0, 0.2) 50%
+            );
+            background-size: 100% 3px;
+            z-index: 20;
+            opacity: 0.3;
+            pointer-events: none;
+        }
+
+        .crt-vignette {
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle, transparent 60%, rgba(0,0,0,0.6) 100%);
+            z-index: 21;
+            pointer-events: none;
+        }
+
+        #controls-hint {
+            margin-top: 20px;
+            font-size: 12px;
+            color: #555;
+            text-align: center;
+            line-height: 1.6;
+            max-width: 800px;
+        }
+
+        .warning { color: var(--alert-red); animation: blink 0.5s infinite; }
+        .nominal { color: #fff; text-shadow: 0 0 8px var(--neon-green); }
+        .critical { color: var(--hud-amber); animation: blink 0.25s infinite; }
+
+        @keyframes blink { 50% { opacity: 0.1; } }
+
+        #modal {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #000;
+            border: 2px solid var(--neon-green);
+            padding: 40px;
+            text-align: center;
+            z-index: 100;
+            display: block;
+            min-width: 350px;
+            box-shadow: 0 0 50px #000;
+        }
+
+        button {
+            background: transparent;
+            color: var(--neon-green);
+            border: 1px solid var(--neon-green);
+            padding: 15px 30px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            font-weight: bold;
+            margin-top: 25px;
+            transition: all 0.2s;
+        }
+
+        button:hover {
+            background: var(--neon-green);
+            color: black;
+            box-shadow: 0 0 20px var(--neon-green);
+        }
+
+        #collision-overlay {
+            position: absolute;
+            inset: 0;
+            background: var(--alert-red);
+            opacity: 0;
+            pointer-events: none;
+            z-index: 25;
+            transition: opacity 0.1s;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-container">
+        <div id="collision-overlay"></div>
+        <div class="overlay crt-scanline"></div>
+        <div class="crt-vignette"></div>
+        
+        <div id="telemetry" class="overlay">
+            &gt; RANGE: <span id="val-z">0.00</span>m<br>
+            &gt; X-DEV: <span id="val-x">0.00</span>m<br>
+            &gt; Y-DEV: <span id="val-y">0.00</span>m<br>
+            &gt; V-NET: <span id="val-vz">0.00</span>m/s
+        </div>
+
+        <div id="status" class="overlay">
+            [ <span id="val-view-label">FPV MODE</span> ]<br>
+            [ RCS FUEL ] <span id="val-fuel">100</span>%<br>
+            [ INPUT ] <span id="val-mode">KEYBOARD</span><br>
+            <span id="align-status">SYS_INIT...</span>
+        </div>
+
+        <canvas id="simCanvas"></canvas>
+        
+        <div id="modal">
+            <h1 id="modal-title" style="margin-top:0">NASA JPL SIM</h1>
+            <p id="modal-desc" style="font-size:18px">SYSTEMS READY. AWAITING PILOT INITIALIZATION.</p>
+            <button id="startBtn" onclick="resetSim()">ENGAGE SYSTEMS</button>
+        </div>
+    </div>
+
+    <div id="controls-hint">
+        <b>[V]</b> CYCLE VIEW | <b>[T]</b> SWITCH INPUT | <b>[SPACE]</b> RCS NULL-VELOCITY (BRAKE)<br>
+        <b>FPV:</b> WASD (X/Y Translation) | Q/E (Z Translation) <br>
+        <b>SIDE:</b> W/S (Y-Axis) | A/D (Z-Axis) | <b>DOCKING REQ:</b> VEL &lt; 0.25 | DEV &lt; 0.60
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const uiContainer = document.getElementById('ui-container');
+        const ctx = canvas.getContext('2d');
+        const modal = document.getElementById('modal');
+        const alignStatus = document.getElementById('align-status');
+        const collisionOverlay = document.getElementById('collision-overlay');
+        const viewLabel = document.getElementById('val-view-label');
+
+        const THRUST = 0.00085;
+        const BRAKE_FORCE = 0.94;
+        const MOUSE_SENSE = 0.0035;
+        const MAG_SNAP_STRENGTH = 0.0012;
+        const DOCKING_RANGE = 0.35;
+        const MAX_DOCK_SPEED = 0.25;
+        const ALIGN_TOLERANCE = 0.6;
+
+        // Center alignment guide square size (half-width in pixels)
+        const GUIDE_SQUARE_HALF = 38;
+
+        let audioCtx = null;
+        let thrusterGain, ambientAirGain, proximityAirGain, proximityFilter;
+
+        let state = {
+            pos: { x: 10, y: -8, z: 140 },
+            vel: { x: -0.015, y: 0.01, z: -0.18 },
+            fuel: 100,
+            active: false,
+            controlMode: 'KEYBOARD',
+            viewMode: 'FPV',
+            frame: 0
+        };
+
+        const keys = {};
+        const mouse = { x: 0, y: 0, inBounds: false };
+
+        // ─────────────────────────────────────────────
+        // AUDIO ENGINE
+        // ─────────────────────────────────────────────
+        function createNoiseBuffer() {
+            const bufferSize = 2 * audioCtx.sampleRate;
+            const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const output = buffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
+            return buffer;
+        }
+
+        function initAudio() {
+            if (audioCtx) return;
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const noiseBuffer = createNoiseBuffer();
+
+            // Cabin Ambience - deep low rumble
+            const ambientNoise = audioCtx.createBufferSource();
+            ambientNoise.buffer = noiseBuffer;
+            ambientNoise.loop = true;
+            const ambientFilter = audioCtx.createBiquadFilter();
+            ambientFilter.type = 'lowpass';
+            ambientFilter.frequency.setValueAtTime(150, audioCtx.currentTime);
+            ambientAirGain = audioCtx.createGain();
+            ambientAirGain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+            ambientNoise.connect(ambientFilter);
+            ambientFilter.connect(ambientAirGain);
+            ambientAirGain.connect(audioCtx.destination);
+            ambientNoise.start();
+
+            // Proximity hiss - gets louder as target nears
+            const proximityNoise = audioCtx.createBufferSource();
+            proximityNoise.buffer = noiseBuffer;
+            proximityNoise.loop = true;
+            proximityFilter = audioCtx.createBiquadFilter();
+            proximityFilter.type = 'bandpass';
+            proximityFilter.frequency.setValueAtTime(2000, audioCtx.currentTime);
+            proximityAirGain = audioCtx.createGain();
+            proximityAirGain.gain.setValueAtTime(0, audioCtx.currentTime);
+            proximityNoise.connect(proximityFilter);
+            proximityFilter.connect(proximityAirGain);
+            proximityAirGain.connect(audioCtx.destination);
+            proximityNoise.start();
+
+            // Thruster jet noise
+            const thrusterNoiseSource = audioCtx.createBufferSource();
+            thrusterNoiseSource.buffer = noiseBuffer;
+            thrusterNoiseSource.loop = true;
+            const tFilter = audioCtx.createBiquadFilter();
+            tFilter.type = 'lowpass';
+            tFilter.frequency.value = 800;
+            thrusterGain = audioCtx.createGain();
+            thrusterGain.gain.value = 0;
+            thrusterNoiseSource.connect(tFilter);
+            tFilter.connect(thrusterGain);
+            thrusterGain.connect(audioCtx.destination);
+            thrusterNoiseSource.start();
+        }
+
+        function updateAudioDynamics(range) {
+            if (!proximityAirGain) return;
+            const intensity = 1 - (Math.max(0, Math.min(100, range)) / 100);
+            proximityAirGain.gain.setTargetAtTime(intensity * 0.15, audioCtx.currentTime, 0.1);
+            proximityFilter.frequency.setTargetAtTime(1000 + (intensity * 3000), audioCtx.currentTime, 0.1);
+        }
+
+        function setThrusterAudio(active) {
+            if (!thrusterGain) return;
+            thrusterGain.gain.setTargetAtTime(active ? 0.4 : 0, audioCtx.currentTime, 0.03);
+        }
+
+        // COLLISION SOUND - explosion burst + metal creak
+        function playCollisionSound() {
+            if (!audioCtx) return;
+            const t = audioCtx.currentTime;
+
+            const expBuf = createNoiseBuffer();
+            const expSrc = audioCtx.createBufferSource();
+            expSrc.buffer = expBuf;
+            const expFilter = audioCtx.createBiquadFilter();
+            expFilter.type = 'lowpass';
+            expFilter.frequency.setValueAtTime(400, t);
+            expFilter.frequency.exponentialRampToValueAtTime(80, t + 0.8);
+            const expGain = audioCtx.createGain();
+            expGain.gain.setValueAtTime(1.5, t);
+            expGain.gain.exponentialRampToValueAtTime(0.001, t + 1.0);
+            expSrc.connect(expFilter);
+            expFilter.connect(expGain);
+            expGain.connect(audioCtx.destination);
+            expSrc.start(t);
+            expSrc.stop(t + 1.0);
+
+            function metalCreak(startT, freq, dur) {
+                const osc = audioCtx.createOscillator();
+                const lfo = audioCtx.createOscillator();
+                const lfoGain = audioCtx.createGain();
+                const oscGain = audioCtx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(freq, startT);
+                osc.frequency.exponentialRampToValueAtTime(freq * 0.6, startT + dur);
+                lfo.type = 'sine';
+                lfo.frequency.setValueAtTime(3 + Math.random() * 5, startT);
+                lfoGain.gain.setValueAtTime(freq * 0.08, startT);
+                oscGain.gain.setValueAtTime(0.25, startT);
+                oscGain.gain.exponentialRampToValueAtTime(0.001, startT + dur);
+                lfo.connect(lfoGain);
+                lfoGain.connect(osc.frequency);
+                osc.connect(oscGain);
+                oscGain.connect(audioCtx.destination);
+                lfo.start(startT); osc.start(startT);
+                lfo.stop(startT + dur); osc.stop(startT + dur);
+            }
+
+            metalCreak(t + 0.15, 180, 1.2);
+            metalCreak(t + 0.35, 130, 1.8);
+            metalCreak(t + 0.60, 95, 2.2);
+            metalCreak(t + 1.00, 70, 1.5);
+
+            const thudOsc = audioCtx.createOscillator();
+            thudOsc.type = 'sine';
+            thudOsc.frequency.setValueAtTime(80, t);
+            thudOsc.frequency.exponentialRampToValueAtTime(20, t + 0.3);
+            const thudGain = audioCtx.createGain();
+            thudGain.gain.setValueAtTime(1.0, t);
+            thudGain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+            thudOsc.connect(thudGain);
+            thudGain.connect(audioCtx.destination);
+            thudOsc.start(t); thudOsc.stop(t + 0.3);
+        }
+
+        // DOCKING SUCCESS SOUND
+        function playDockingSound() {
+            if (!audioCtx) return;
+            const t = audioCtx.currentTime;
+
+            function metalClank(startT, freq, dur, vol) {
+                const osc1 = audioCtx.createOscillator();
+                const osc2 = audioCtx.createOscillator();
+                const g = audioCtx.createGain();
+                osc1.type = 'square';
+                osc2.type = 'sawtooth';
+                osc1.frequency.setValueAtTime(freq, startT);
+                osc1.frequency.exponentialRampToValueAtTime(freq * 0.5, startT + dur);
+                osc2.frequency.setValueAtTime(freq * 1.5, startT);
+                osc2.frequency.exponentialRampToValueAtTime(freq * 0.8, startT + dur);
+                g.gain.setValueAtTime(vol, startT);
+                g.gain.exponentialRampToValueAtTime(0.001, startT + dur);
+                osc1.connect(g); osc2.connect(g);
+                g.connect(audioCtx.destination);
+                osc1.start(startT); osc2.start(startT);
+                osc1.stop(startT + dur); osc2.stop(startT + dur);
+            }
+
+            metalClank(t,        320, 0.6, 0.9);
+            metalClank(t + 0.05, 240, 0.4, 0.5);
+            metalClank(t + 0.12, 180, 0.3, 0.3);
+
+            const latchOsc = audioCtx.createOscillator();
+            latchOsc.type = 'square';
+            latchOsc.frequency.setValueAtTime(900, t + 0.4);
+            latchOsc.frequency.exponentialRampToValueAtTime(200, t + 0.5);
+            const latchGain = audioCtx.createGain();
+            latchGain.gain.setValueAtTime(0.4, t + 0.4);
+            latchGain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+            latchOsc.connect(latchGain);
+            latchGain.connect(audioCtx.destination);
+            latchOsc.start(t + 0.4); latchOsc.stop(t + 0.5);
+
+            const airBuf = createNoiseBuffer();
+            const airSrc = audioCtx.createBufferSource();
+            airSrc.buffer = airBuf;
+            const airFilt = audioCtx.createBiquadFilter();
+            airFilt.type = 'bandpass';
+            airFilt.frequency.setValueAtTime(300, t + 0.6);
+            airFilt.frequency.exponentialRampToValueAtTime(1800, t + 2.2);
+            airFilt.frequency.exponentialRampToValueAtTime(400, t + 3.5);
+            const airGain = audioCtx.createGain();
+            airGain.gain.setValueAtTime(0, t + 0.6);
+            airGain.gain.linearRampToValueAtTime(0.3, t + 1.2);
+            airGain.gain.exponentialRampToValueAtTime(0.001, t + 3.5);
+            airSrc.connect(airFilt);
+            airFilt.connect(airGain);
+            airGain.connect(audioCtx.destination);
+            airSrc.start(t + 0.6);
+            airSrc.stop(t + 3.5);
+
+            const humOsc = audioCtx.createOscillator();
+            humOsc.type = 'sine';
+            humOsc.frequency.setValueAtTime(60, t + 0.8);
+            humOsc.frequency.linearRampToValueAtTime(80, t + 2.5);
+            const humGain = audioCtx.createGain();
+            humGain.gain.setValueAtTime(0, t + 0.8);
+            humGain.gain.linearRampToValueAtTime(0.2, t + 1.5);
+            humGain.gain.exponentialRampToValueAtTime(0.001, t + 3.0);
+            humOsc.connect(humGain);
+            humGain.connect(audioCtx.destination);
+            humOsc.start(t + 0.8); humOsc.stop(t + 3.0);
+        }
+
+        // ─────────────────────────────────────────────
+        // SIMULATION LOGIC
+        // ─────────────────────────────────────────────
+        function init() {
+            window.addEventListener('keydown', e => {
+                keys[e.code] = true;
+                if (e.code === 'KeyT') toggleControlMode();
+                if (e.code === 'KeyV') toggleViewMode();
+            });
+            window.addEventListener('keyup', e => keys[e.code] = false);
+            uiContainer.addEventListener('mousemove', e => {
+                const rect = uiContainer.getBoundingClientRect();
+                mouse.x = (e.clientX - (rect.left + rect.width / 2)) / (rect.width / 2);
+                mouse.y = (e.clientY - (rect.top + rect.height / 2)) / (rect.height / 2);
+                mouse.inBounds = true;
+            });
+            uiContainer.addEventListener('mouseleave', () => mouse.inBounds = false);
+            resize();
+            window.addEventListener('resize', resize);
+            requestAnimationFrame(loop);
+        }
+
+        function toggleControlMode() {
+            state.controlMode = state.controlMode === 'KEYBOARD' ? 'MOUSE' : 'KEYBOARD';
+            document.getElementById('val-mode').innerText = state.controlMode;
+        }
+
+        function toggleViewMode() {
+            state.viewMode = state.viewMode === 'FPV' ? 'SIDE' : 'FPV';
+            viewLabel.innerText = state.viewMode === 'FPV' ? 'FPV MODE' : 'SIDE VIEW';
+        }
+
+        function resize() {
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+        }
+
+        function resetSim() {
+            initAudio();
+            state.pos = { x: (Math.random() - 0.5) * 15, y: (Math.random() - 0.5) * 10, z: 140 };
+            state.vel = { x: (Math.random() - 0.5) * 0.02, y: (Math.random() - 0.5) * 0.02, z: -0.15 };
+            state.fuel = 100;
+            state.active = true;
+            modal.style.display = 'none';
+            collisionOverlay.style.opacity = 0;
+        }
+
+        function update() {
+            if (!state.active) return;
+            state.frame++;
+            let thrusting = false;
+
+            if (state.fuel > 0) {
+                if (state.controlMode === 'KEYBOARD') {
+                    if (state.viewMode === 'FPV') {
+                        if (keys['KeyW'] || keys['ArrowUp'])    { state.vel.y += THRUST; thrusting = true; }
+                        if (keys['KeyS'] || keys['ArrowDown'])  { state.vel.y -= THRUST; thrusting = true; }
+                        if (keys['KeyA'] || keys['ArrowLeft'])  { state.vel.x -= THRUST; thrusting = true; }
+                        if (keys['KeyD'] || keys['ArrowRight']) { state.vel.x += THRUST; thrusting = true; }
+                        if (keys['KeyQ']) { state.vel.z += THRUST; thrusting = true; }
+                        if (keys['KeyE']) { state.vel.z -= THRUST; thrusting = true; }
+                    } else {
+                        if (keys['KeyW'] || keys['ArrowUp'])    { state.vel.y += THRUST; thrusting = true; }
+                        if (keys['KeyS'] || keys['ArrowDown'])  { state.vel.y -= THRUST; thrusting = true; }
+                        if (keys['KeyA'] || keys['ArrowLeft'])  { state.vel.z += THRUST; thrusting = true; }
+                        if (keys['KeyD'] || keys['ArrowRight']) { state.vel.z -= THRUST; thrusting = true; }
+                    }
+                } else if (mouse.inBounds) {
+                    state.vel.x += mouse.x * MOUSE_SENSE * 0.1;
+                    state.vel.y -= mouse.y * MOUSE_SENSE * 0.1;
+                    thrusting = true;
+                }
+                if (keys['Space']) {
+                    state.vel.x *= BRAKE_FORCE;
+                    state.vel.y *= BRAKE_FORCE;
+                    state.vel.z *= BRAKE_FORCE;
+                    state.fuel -= 0.06;
+                    thrusting = true;
+                }
+            }
+
+            setThrusterAudio(thrusting);
+            updateAudioDynamics(state.pos.z);
+            if (thrusting) state.fuel -= 0.02;
+
+            // Magnetic snap
+            if (state.pos.z < 2.5 && state.pos.z > 0) {
+                const distToCenter = Math.sqrt(state.pos.x**2 + state.pos.y**2);
+                if (distToCenter < ALIGN_TOLERANCE * 1.5) {
+                    state.pos.x -= state.pos.x * MAG_SNAP_STRENGTH * (3 - state.pos.z);
+                    state.pos.y -= state.pos.y * MAG_SNAP_STRENGTH * (3 - state.pos.z);
+                }
+            }
+
+            state.pos.x += state.vel.x;
+            state.pos.y += state.vel.y;
+            state.pos.z += state.vel.z;
+
+            document.getElementById('val-x').innerText = state.pos.x.toFixed(2);
+            document.getElementById('val-y').innerText = state.pos.y.toFixed(2);
+            document.getElementById('val-z').innerText = Math.max(0, state.pos.z).toFixed(2);
+            document.getElementById('val-vz').innerText = (state.vel.z * 10).toFixed(2);
+            document.getElementById('val-fuel').innerText = Math.max(0, state.fuel).toFixed(0);
+
+            const lateralErr = Math.sqrt(state.pos.x**2 + state.pos.y**2);
+            const speed = Math.abs(state.vel.z * 10);
+
+            if (state.pos.z < 8) {
+                if (state.pos.z < 1.5) alignStatus.innerHTML = "<span class='critical'>WARNING: CONTACT</span>";
+                else if (lateralErr < ALIGN_TOLERANCE && speed < MAX_DOCK_SPEED) alignStatus.innerHTML = "<span class='nominal'>PRECISION ALIGN: OK</span>";
+                else if (speed >= MAX_DOCK_SPEED) alignStatus.innerHTML = "<span class='warning'>VELOCITY HIGH</span>";
+                else alignStatus.innerHTML = "<span class='warning'>VECTOR MISMATCH</span>";
+            } else {
+                alignStatus.innerText = state.pos.z < 50 ? "STAGE 2: FINAL APPR" : "STAGE 1: INTERCEPT";
+            }
+
+            if (state.pos.z <= DOCKING_RANGE) checkDocking(speed, lateralErr);
+            if (state.pos.z > 300) endMission("COMMS LOST", "Vessel beyond range.");
+        }
+
+        function checkDocking(speed, lateralErr) {
+            if (speed > MAX_DOCK_SPEED) {
+                collisionOverlay.style.opacity = 1;
+                playCollisionSound();
+                endMission("STRUCTURAL FAILURE", `High-velocity collision: ${speed.toFixed(2)}m/s.`);
+            } else if (lateralErr > ALIGN_TOLERANCE) {
+                collisionOverlay.style.opacity = 0.6;
+                playCollisionSound();
+                endMission("LATCH MISMATCH", `Collars failed. Offset: ${lateralErr.toFixed(2)}m.`);
+            } else {
+                playDockingSound();
+                endMission("MISSION SUCCESS", "Safe docking achieved. Interlock secured.", true);
+            }
+        }
+
+        function endMission(title, desc, success = false) {
+            state.active = false;
+            setThrusterAudio(false);
+            modal.style.display = 'block';
+            document.getElementById('modal-title').innerText = title;
+            document.getElementById('modal-title').style.color = success ? 'var(--neon-green)' : 'var(--alert-red)';
+            document.getElementById('modal-desc').innerText = desc;
+        }
+
+        // ─────────────────────────────────────────────
+        // RENDERING ENGINE
+        // ─────────────────────────────────────────────
+        function draw() {
+            ctx.fillStyle = 'rgba(0, 5, 0, 0.25)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            const cx = canvas.width / 2;
+            const cy = canvas.height / 2;
+
+            if (state.viewMode === 'FPV') {
+                drawGridFPV(cx, cy);
+                drawCenterAlignGuide(cx, cy);   // ← static guide square, drawn BEFORE station so it sits behind
+                drawStationFPV(cx, cy);
+                drawTrajectoryLine(cx, cy);
+                drawHUD(cx, cy);
+                drawThrusterFeedback(cx, cy);
+            } else {
+                drawSideView(cx, cy);
+            }
+        }
+
+        function drawGridFPV(cx, cy) {
+            ctx.strokeStyle = 'rgba(0, 255, 65, 0.04)';
+            ctx.lineWidth = 1;
+            const size = 800, step = 80;
+            for (let i = -size; i <= size; i += step) {
+                ctx.beginPath(); ctx.moveTo(cx + i, cy - size); ctx.lineTo(cx + i, cy + size); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(cx - size, cy + i); ctx.lineTo(cx + size, cy + i); ctx.stroke();
+            }
+        }
+
+        // ─────────────────────────────────────────────
+        // CENTER ALIGNMENT GUIDE SQUARE (FPV only)
+        // A static semi-transparent white square fixed to the exact screen
+        // center. The pilot must manoeuvre the docking port (station target)
+        // into this box to achieve perfect centre alignment before final approach.
+        // ─────────────────────────────────────────────
+        function drawCenterAlignGuide(cx, cy) {
+            const h = GUIDE_SQUARE_HALF;
+
+            // Filled semi-transparent white interior
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
+            ctx.fillRect(cx - h, cy - h, h * 2, h * 2);
+
+            // Solid white border
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(cx - h, cy - h, h * 2, h * 2);
+
+            // Corner tick marks (slightly longer than main border to stand out)
+            const tick = 10;
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.70)';
+            ctx.lineWidth = 1.5;
+            // Top-left
+            ctx.beginPath();
+            ctx.moveTo(cx - h, cy - h + tick); ctx.lineTo(cx - h, cy - h); ctx.lineTo(cx - h + tick, cy - h);
+            ctx.stroke();
+            // Top-right
+            ctx.beginPath();
+            ctx.moveTo(cx + h - tick, cy - h); ctx.lineTo(cx + h, cy - h); ctx.lineTo(cx + h, cy - h + tick);
+            ctx.stroke();
+            // Bottom-left
+            ctx.beginPath();
+            ctx.moveTo(cx - h, cy + h - tick); ctx.lineTo(cx - h, cy + h); ctx.lineTo(cx - h + tick, cy + h);
+            ctx.stroke();
+            // Bottom-right
+            ctx.beginPath();
+            ctx.moveTo(cx + h - tick, cy + h); ctx.lineTo(cx + h, cy + h); ctx.lineTo(cx + h, cy + h - tick);
+            ctx.stroke();
+
+            // Small centre crosshair dot
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+            ctx.beginPath();
+            ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Label
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.30)';
+            ctx.font = '9px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText('ALIGN REF', cx, cy - h - 5);
+            ctx.textAlign = 'left';
+        }
+
+        function drawStationFPV(cx, cy) {
+            const z = Math.max(0.1, state.pos.z);
+            const scale = 3500 / (z + 8);
+            const ox = state.pos.x * scale, oy = -state.pos.y * scale;
+
+            // Approach corridor boxes
+            ctx.strokeStyle = 'rgba(0, 255, 65, 0.1)';
+            ctx.lineWidth = 1;
+            for (let i = 1; i <= 3; i++) {
+                const s = 3500 / (z + 8 + i * 30);
+                ctx.strokeRect(cx + (state.pos.x * s) - s * 2, cy + (-state.pos.y * s) - s * 2, s * 4, s * 4);
+            }
+
+            // Octagonal docking port
+            ctx.strokeStyle = 'var(--neon-green)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            const r = scale * 4.5;
+            for (let a = 0; a <= 8; a++) {
+                const angle = (a / 8) * Math.PI * 2;
+                const vx = cx + ox + Math.cos(angle) * r;
+                const vy = cy + oy + Math.sin(angle) * r;
+                if (a === 0) ctx.moveTo(vx, vy); else ctx.lineTo(vx, vy);
+            }
+            ctx.stroke();
+
+            // Inner ring
+            ctx.beginPath(); ctx.arc(cx + ox, cy + oy, scale * 1.5, 0, Math.PI * 2); ctx.stroke();
+
+            // Guide corner lights (pulsing)
+            const pulse = (Math.sin(state.frame * 0.15) + 1) / 2;
+            ctx.fillStyle = `rgba(255, 255, 255, ${pulse * 0.8})`;
+            [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(p => {
+                ctx.beginPath();
+                ctx.arc(cx + ox + p[0] * scale * 3.8, cy + oy + p[1] * scale * 3.8, Math.max(1, scale * 0.2), 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        // LIVE CURVED TRAJECTORY LINE from center screen to projected probe position
+        function drawTrajectoryLine(cx, cy) {
+            const z = Math.max(0.1, state.pos.z);
+            const scale = 3500 / (z + 8);
+
+            const targetX = cx + state.pos.x * scale;
+            const targetY = cy - state.pos.y * scale;
+
+            const midFz = Math.max(0.1, state.pos.z + state.vel.z * 60);
+            const midScale = 3500 / (midFz + 8);
+            const midX = cx + (state.pos.x + state.vel.x * 60) * midScale;
+            const midY = cy + (-state.pos.y + -state.vel.y * 60) * midScale;
+
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(0, 255, 65, 0.45)';
+            ctx.setLineDash([5, 5]);
+            ctx.lineWidth = 1;
+            ctx.moveTo(cx, cy);
+            ctx.quadraticCurveTo(midX, midY, targetX, targetY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            const dx = targetX - midX;
+            const dy = targetY - midY;
+            const len = Math.sqrt(dx * dx + dy * dy) || 1;
+            const nx = dx / len, ny = dy / len;
+            const arrowSize = 8;
+            ctx.fillStyle = 'rgba(0, 255, 65, 0.6)';
+            ctx.beginPath();
+            ctx.moveTo(targetX + nx * arrowSize, targetY + ny * arrowSize);
+            ctx.lineTo(targetX - ny * arrowSize * 0.5, targetY + nx * arrowSize * 0.5);
+            ctx.lineTo(targetX + ny * arrowSize * 0.5, targetY - nx * arrowSize * 0.5);
+            ctx.closePath();
+            ctx.fill();
+
+            const angle = Math.atan2(state.vel.y, state.vel.x) * 180 / Math.PI;
+            ctx.fillStyle = 'rgba(0, 255, 65, 0.55)';
+            ctx.font = '9px Courier New';
+            ctx.fillText(`TRJ ${angle.toFixed(1)}°`, midX + 8, midY - 6);
+        }
+
+        function drawHUD(cx, cy) {
+            const z = Math.max(0.1, state.pos.z);
+            const scale = 3500 / (z + 8);
+            const ox = state.pos.x * scale, oy = -state.pos.y * scale;
+            const lateralErr = Math.sqrt(state.pos.x**2 + state.pos.y**2);
+            const isAligned = lateralErr < ALIGN_TOLERANCE;
+
+            // Dynamic crosshair at docking port
+            ctx.strokeStyle = isAligned ? '#fff' : 'var(--neon-green)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(cx + ox - 25, cy + oy); ctx.lineTo(cx + ox - 10, cy + oy);
+            ctx.moveTo(cx + ox + 25, cy + oy); ctx.lineTo(cx + ox + 10, cy + oy);
+            ctx.moveTo(cx + ox, cy + oy - 25); ctx.lineTo(cx + ox, cy + oy - 10);
+            ctx.moveTo(cx + ox, cy + oy + 25); ctx.lineTo(cx + ox, cy + oy + 10);
+            ctx.stroke();
+
+            if (isAligned) {
+                ctx.strokeRect(cx + ox - 15, cy + oy - 15, 30, 30);
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+                const b = 150;
+                ctx.beginPath();
+                ctx.moveTo(cx - b, cy - b + 20); ctx.lineTo(cx - b, cy - b); ctx.lineTo(cx - b + 20, cy - b);
+                ctx.moveTo(cx + b, cy - b + 20); ctx.lineTo(cx + b, cy - b); ctx.lineTo(cx + b - 20, cy - b);
+                ctx.moveTo(cx - b, cy + b - 20); ctx.lineTo(cx - b, cy + b); ctx.lineTo(cx - b + 20, cy + b);
+                ctx.moveTo(cx + b, cy + b - 20); ctx.lineTo(cx + b, cy + b); ctx.lineTo(cx + b - 20, cy + b);
+                ctx.stroke();
+            }
+
+            // Velocity vector indicator (amber)
+            const vx = cx + (state.pos.x + state.vel.x * 60) * scale;
+            const vy = cy + (-state.pos.y + -state.vel.y * 60) * scale;
+            ctx.strokeStyle = 'var(--hud-amber)';
+            ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.arc(vx, vy, 6, 0, Math.PI * 2); ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(vx - 8, vy); ctx.lineTo(vx + 8, vy);
+            ctx.moveTo(vx, vy - 8); ctx.lineTo(vx, vy + 8);
+            ctx.stroke();
+        }
+
+        // FPV thruster indicators
+        function drawThrusterFeedback(cx, cy) {
+            if (!state.active || state.fuel <= 0) return;
+            const margin = 100;
+            ctx.fillStyle = '#fff';
+            ctx.font = '10px monospace';
+
+            if (keys['KeyS'] || keys['ArrowDown']) {
+                ctx.beginPath();
+                ctx.moveTo(cx, cy - margin);
+                ctx.lineTo(cx - 10, cy - margin - 20);
+                ctx.lineTo(cx + 10, cy - margin - 20);
+                ctx.fill();
+                ctx.fillText("RCS-TOP", cx - 20, cy - margin - 25);
+            }
+            if (keys['KeyW'] || keys['ArrowUp']) {
+                ctx.beginPath();
+                ctx.moveTo(cx, cy + margin);
+                ctx.lineTo(cx - 10, cy + margin + 20);
+                ctx.lineTo(cx + 10, cy + margin + 20);
+                ctx.fill();
+                ctx.fillText("RCS-BTM", cx - 20, cy + margin + 35);
+            }
+            if (keys['KeyD'] || keys['ArrowRight']) {
+                ctx.beginPath();
+                ctx.moveTo(cx - margin, cy);
+                ctx.lineTo(cx - margin - 20, cy - 10);
+                ctx.lineTo(cx - margin - 20, cy + 10);
+                ctx.fill();
+                ctx.fillText("RCS-LH", cx - margin - 50, cy + 5);
+            }
+            if (keys['KeyA'] || keys['ArrowLeft']) {
+                ctx.beginPath();
+                ctx.moveTo(cx + margin, cy);
+                ctx.lineTo(cx + margin + 20, cy - 10);
+                ctx.lineTo(cx + margin + 20, cy + 10);
+                ctx.fill();
+                ctx.fillText("RCS-RH", cx + margin + 25, cy + 5);
+            }
+        }
+
+        // ─────────────────────────────────────────────
+        // SIDE VIEW
+        // ─────────────────────────────────────────────
+        function drawSideView(cx, cy) {
+            const zoom = 5.0;
+            const sX = cx + 220;
+            const shipX = sX - (state.pos.z * zoom);
+            const shipY = cy - (state.pos.y * zoom);
+
+            ctx.strokeStyle = 'rgba(0, 255, 65, 0.1)';
+            ctx.lineWidth = 1;
+            for (let x = 0; x < canvas.width; x += 50) {
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+            }
+            for (let y = 0; y < canvas.height; y += 50) {
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+            }
+
+            ctx.strokeStyle = 'var(--dark-green)';
+            ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.moveTo(sX, cy - 100); ctx.lineTo(sX, cy + 100); ctx.stroke();
+
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+            ctx.fillRect(sX - 10, cy - ALIGN_TOLERANCE * zoom, 10, ALIGN_TOLERANCE * zoom * 2);
+
+            ctx.setLineDash([15, 6]);
+            ctx.strokeStyle = 'rgba(0, 255, 65, 0.18)';
+            ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(canvas.width, cy); ctx.stroke();
+            ctx.setLineDash([]);
+
+            if (Math.abs(shipY - cy) > 2) {
+                ctx.strokeStyle = Math.abs(state.pos.y) < ALIGN_TOLERANCE
+                    ? 'rgba(255, 255, 255, 0.5)'
+                    : 'rgba(255, 80, 80, 0.5)';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([3, 5]);
+                ctx.beginPath(); ctx.moveTo(shipX, cy); ctx.lineTo(shipX, shipY); ctx.stroke();
+                ctx.setLineDash([]);
+
+                ctx.fillStyle = Math.abs(state.pos.y) < ALIGN_TOLERANCE ? '#aaffaa' : '#ff8888';
+                ctx.font = '9px Courier New';
+                ctx.fillText(`Y: ${state.pos.y.toFixed(2)}m`, shipX + 5, (cy + shipY) / 2);
+            }
+
+            ctx.setLineDash([10, 5]);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(shipX, shipY); ctx.lineTo(sX, shipY); ctx.stroke();
+            ctx.setLineDash([]);
+
+            const tickInterval = 20;
+            for (let d = tickInterval; d < state.pos.z; d += tickInterval) {
+                const tx = sX - (d * zoom);
+                ctx.strokeStyle = 'rgba(0, 255, 65, 0.35)';
+                ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(tx, shipY - 5); ctx.lineTo(tx, shipY + 5); ctx.stroke();
+                if (d % 40 === 0) {
+                    ctx.fillStyle = 'rgba(0, 255, 65, 0.5)';
+                    ctx.font = '8px Courier New';
+                    ctx.fillText(`${d}`, tx - 6, shipY + 16);
+                }
+            }
+
+            ctx.fillStyle = '#fff';
+            ctx.font = '10px Courier New';
+            ctx.fillText(`DIST: ${state.pos.z.toFixed(1)}M`, shipX, shipY + 30);
+
+            const vArrowLen = state.vel.z * zoom * 80;
+            ctx.strokeStyle = 'var(--hud-amber)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(shipX, shipY - 20);
+            ctx.lineTo(shipX + vArrowLen, shipY - 20);
+            ctx.stroke();
+            if (Math.abs(vArrowLen) > 3) {
+                const arrowDir = vArrowLen > 0 ? 1 : -1;
+                ctx.fillStyle = 'var(--hud-amber)';
+                ctx.beginPath();
+                ctx.moveTo(shipX + vArrowLen + arrowDir * 6, shipY - 20);
+                ctx.lineTo(shipX + vArrowLen - arrowDir * 4, shipY - 25);
+                ctx.lineTo(shipX + vArrowLen - arrowDir * 4, shipY - 15);
+                ctx.fill();
+            }
+            ctx.fillStyle = 'var(--hud-amber)';
+            ctx.font = '9px Courier New';
+            ctx.fillText(`VZ:${(state.vel.z * 10).toFixed(2)}`, shipX - 2, shipY - 25);
+
+            ctx.save();
+            ctx.translate(shipX, shipY);
+            ctx.strokeStyle = Math.abs(state.pos.y) < ALIGN_TOLERANCE ? '#fff' : 'var(--neon-green)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(-40, -12, 35, 24);
+            ctx.strokeRect(-5, -6, 12, 12);
+
+            ctx.fillStyle = '#fff';
+
+            if (keys['KeyW'] || keys['ArrowUp']) {
+                ctx.beginPath();
+                ctx.moveTo(-22, 15); ctx.lineTo(-17, 32); ctx.lineTo(-12, 15);
+                ctx.fill();
+                ctx.font = '8px Courier New';
+                ctx.fillStyle = '#fff';
+                ctx.fillText("RCS-BTM", -36, 42);
+                ctx.fillStyle = '#fff';
+            }
+            if (keys['KeyS'] || keys['ArrowDown']) {
+                ctx.beginPath();
+                ctx.moveTo(-22, -15); ctx.lineTo(-17, -32); ctx.lineTo(-12, -15);
+                ctx.fill();
+                ctx.font = '8px Courier New';
+                ctx.fillStyle = '#fff';
+                ctx.fillText("RCS-TOP", -36, -36);
+                ctx.fillStyle = '#fff';
+            }
+            if (keys['KeyD'] || keys['ArrowRight']) {
+                ctx.beginPath();
+                ctx.moveTo(-45, -8); ctx.lineTo(-65, 0); ctx.lineTo(-45, 8);
+                ctx.fill();
+                ctx.font = '8px Courier New';
+                ctx.fillStyle = '#fff';
+                ctx.fillText("RCS-AFT", -82, 3);
+                ctx.fillStyle = '#fff';
+            }
+            if (keys['KeyA'] || keys['ArrowLeft']) {
+                ctx.beginPath();
+                ctx.moveTo(8, -5); ctx.lineTo(25, 0); ctx.lineTo(8, 5);
+                ctx.fill();
+                ctx.font = '8px Courier New';
+                ctx.fillStyle = '#fff';
+                ctx.fillText("RCS-FWD", 28, 3);
+                ctx.fillStyle = '#fff';
+            }
+
+            ctx.restore();
+
+            ctx.fillStyle = 'rgba(0, 255, 65, 0.4)';
+            ctx.font = '9px Courier New';
+            ctx.fillText(`ALIGN ZONE`, sX + 5, cy - ALIGN_TOLERANCE * zoom - 4);
+            ctx.fillText(`±${ALIGN_TOLERANCE}m`, sX + 5, cy + ALIGN_TOLERANCE * zoom + 12);
+        }
+
+        function loop() { update(); draw(); requestAnimationFrame(loop); }
+        init();
+    </script>
+</body>
+</html>
