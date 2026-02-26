@@ -224,7 +224,10 @@
         const MAG_SNAP_STRENGTH = 0.0012;
         const DOCKING_RANGE = 0.35;
         const MAX_DOCK_SPEED = 0.25;
-        const ALIGN_TOLERANCE = 0.6;
+        const ALIGN_TOLERANCE = 0.2;
+
+        // Center alignment guide square size (half-width in pixels)
+        const GUIDE_SQUARE_HALF = 38;
 
         let audioCtx = null;
         let thrusterGain, ambientAirGain, proximityAirGain, proximityFilter;
@@ -318,7 +321,6 @@
             if (!audioCtx) return;
             const t = audioCtx.currentTime;
 
-            // Explosion - filtered burst of noise with sharp envelope
             const expBuf = createNoiseBuffer();
             const expSrc = audioCtx.createBufferSource();
             expSrc.buffer = expBuf;
@@ -335,7 +337,6 @@
             expSrc.start(t);
             expSrc.stop(t + 1.0);
 
-            // Metal creak - low frequency oscillator with slow wobble
             function metalCreak(startT, freq, dur) {
                 const osc = audioCtx.createOscillator();
                 const lfo = audioCtx.createOscillator();
@@ -362,7 +363,6 @@
             metalCreak(t + 0.60, 95, 2.2);
             metalCreak(t + 1.00, 70, 1.5);
 
-            // Impact thud
             const thudOsc = audioCtx.createOscillator();
             thudOsc.type = 'sine';
             thudOsc.frequency.setValueAtTime(80, t);
@@ -375,12 +375,11 @@
             thudOsc.start(t); thudOsc.stop(t + 0.3);
         }
 
-        // DOCKING SUCCESS SOUND - metal clank + airlock pressurization
+        // DOCKING SUCCESS SOUND
         function playDockingSound() {
             if (!audioCtx) return;
             const t = audioCtx.currentTime;
 
-            // Metal-to-metal clank - sharp metallic strike
             function metalClank(startT, freq, dur, vol) {
                 const osc1 = audioCtx.createOscillator();
                 const osc2 = audioCtx.createOscillator();
@@ -399,11 +398,10 @@
                 osc1.stop(startT + dur); osc2.stop(startT + dur);
             }
 
-            metalClank(t,        320, 0.6, 0.9);  // primary clank
-            metalClank(t + 0.05, 240, 0.4, 0.5);  // secondary resonance
-            metalClank(t + 0.12, 180, 0.3, 0.3);  // tail ring
+            metalClank(t,        320, 0.6, 0.9);
+            metalClank(t + 0.05, 240, 0.4, 0.5);
+            metalClank(t + 0.12, 180, 0.3, 0.3);
 
-            // Latch click - short burst
             const latchOsc = audioCtx.createOscillator();
             latchOsc.type = 'square';
             latchOsc.frequency.setValueAtTime(900, t + 0.4);
@@ -415,7 +413,6 @@
             latchGain.connect(audioCtx.destination);
             latchOsc.start(t + 0.4); latchOsc.stop(t + 0.5);
 
-            // Airlock pressurization - rising hiss + low hum
             const airBuf = createNoiseBuffer();
             const airSrc = audioCtx.createBufferSource();
             airSrc.buffer = airBuf;
@@ -434,7 +431,6 @@
             airSrc.start(t + 0.6);
             airSrc.stop(t + 3.5);
 
-            // Equalization/pressure tone hum
             const humOsc = audioCtx.createOscillator();
             humOsc.type = 'sine';
             humOsc.frequency.setValueAtTime(60, t + 0.8);
@@ -603,6 +599,7 @@
 
             if (state.viewMode === 'FPV') {
                 drawGridFPV(cx, cy);
+                drawCenterAlignGuide(cx, cy);   // ← static guide square, drawn BEFORE station so it sits behind
                 drawStationFPV(cx, cy);
                 drawTrajectoryLine(cx, cy);
                 drawHUD(cx, cy);
@@ -620,6 +617,59 @@
                 ctx.beginPath(); ctx.moveTo(cx + i, cy - size); ctx.lineTo(cx + i, cy + size); ctx.stroke();
                 ctx.beginPath(); ctx.moveTo(cx - size, cy + i); ctx.lineTo(cx + size, cy + i); ctx.stroke();
             }
+        }
+
+        // ─────────────────────────────────────────────
+        // CENTER ALIGNMENT GUIDE SQUARE (FPV only)
+        // A static semi-transparent white square fixed to the exact screen
+        // center. The pilot must manoeuvre the docking port (station target)
+        // into this box to achieve perfect centre alignment before final approach.
+        // ─────────────────────────────────────────────
+        function drawCenterAlignGuide(cx, cy) {
+            const h = GUIDE_SQUARE_HALF;
+
+            // Filled semi-transparent white interior
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
+            ctx.fillRect(cx - h, cy - h, h * 2, h * 2);
+
+            // Solid white border
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(cx - h, cy - h, h * 2, h * 2);
+
+            // Corner tick marks (slightly longer than main border to stand out)
+            const tick = 10;
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.70)';
+            ctx.lineWidth = 1.5;
+            // Top-left
+            ctx.beginPath();
+            ctx.moveTo(cx - h, cy - h + tick); ctx.lineTo(cx - h, cy - h); ctx.lineTo(cx - h + tick, cy - h);
+            ctx.stroke();
+            // Top-right
+            ctx.beginPath();
+            ctx.moveTo(cx + h - tick, cy - h); ctx.lineTo(cx + h, cy - h); ctx.lineTo(cx + h, cy - h + tick);
+            ctx.stroke();
+            // Bottom-left
+            ctx.beginPath();
+            ctx.moveTo(cx - h, cy + h - tick); ctx.lineTo(cx - h, cy + h); ctx.lineTo(cx - h + tick, cy + h);
+            ctx.stroke();
+            // Bottom-right
+            ctx.beginPath();
+            ctx.moveTo(cx + h - tick, cy + h); ctx.lineTo(cx + h, cy + h); ctx.lineTo(cx + h, cy + h - tick);
+            ctx.stroke();
+
+            // Small centre crosshair dot
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+            ctx.beginPath();
+            ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Label
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.30)';
+            ctx.font = '9px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText('ALIGN REF', cx, cy - h - 5);
+            ctx.textAlign = 'left';
         }
 
         function drawStationFPV(cx, cy) {
@@ -666,17 +716,14 @@
             const z = Math.max(0.1, state.pos.z);
             const scale = 3500 / (z + 8);
 
-            // Compute current target screen pos (where docking port is)
             const targetX = cx + state.pos.x * scale;
             const targetY = cy - state.pos.y * scale;
 
-            // Control point for curve - midpoint deflected by velocity
             const midFz = Math.max(0.1, state.pos.z + state.vel.z * 60);
             const midScale = 3500 / (midFz + 8);
             const midX = cx + (state.pos.x + state.vel.x * 60) * midScale;
             const midY = cy + (-state.pos.y + -state.vel.y * 60) * midScale;
 
-            // Draw quadratic bezier from center screen to target, curved through mid
             ctx.beginPath();
             ctx.strokeStyle = 'rgba(0, 255, 65, 0.45)';
             ctx.setLineDash([5, 5]);
@@ -686,7 +733,6 @@
             ctx.stroke();
             ctx.setLineDash([]);
 
-            // Small arrow tip at target
             const dx = targetX - midX;
             const dy = targetY - midY;
             const len = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -700,7 +746,6 @@
             ctx.closePath();
             ctx.fill();
 
-            // Angle readout label near midpoint
             const angle = Math.atan2(state.vel.y, state.vel.x) * 180 / Math.PI;
             ctx.fillStyle = 'rgba(0, 255, 65, 0.55)';
             ctx.font = '9px Courier New';
@@ -748,14 +793,13 @@
             ctx.stroke();
         }
 
-        // FPV thruster indicators (old-style, around center screen)
+        // FPV thruster indicators
         function drawThrusterFeedback(cx, cy) {
             if (!state.active || state.fuel <= 0) return;
             const margin = 100;
             ctx.fillStyle = '#fff';
             ctx.font = '10px monospace';
 
-            // Top thruster (S key fires top RCS to push down => ship goes down)
             if (keys['KeyS'] || keys['ArrowDown']) {
                 ctx.beginPath();
                 ctx.moveTo(cx, cy - margin);
@@ -764,7 +808,6 @@
                 ctx.fill();
                 ctx.fillText("RCS-TOP", cx - 20, cy - margin - 25);
             }
-            // Bottom thruster
             if (keys['KeyW'] || keys['ArrowUp']) {
                 ctx.beginPath();
                 ctx.moveTo(cx, cy + margin);
@@ -773,7 +816,6 @@
                 ctx.fill();
                 ctx.fillText("RCS-BTM", cx - 20, cy + margin + 35);
             }
-            // Left thruster
             if (keys['KeyD'] || keys['ArrowRight']) {
                 ctx.beginPath();
                 ctx.moveTo(cx - margin, cy);
@@ -782,7 +824,6 @@
                 ctx.fill();
                 ctx.fillText("RCS-LH", cx - margin - 50, cy + 5);
             }
-            // Right thruster
             if (keys['KeyA'] || keys['ArrowLeft']) {
                 ctx.beginPath();
                 ctx.moveTo(cx + margin, cy);
@@ -794,7 +835,7 @@
         }
 
         // ─────────────────────────────────────────────
-        // SIDE VIEW (matching old version: indicator lines + thruster indicators)
+        // SIDE VIEW
         // ─────────────────────────────────────────────
         function drawSideView(cx, cy) {
             const zoom = 5.0;
@@ -802,7 +843,6 @@
             const shipX = sX - (state.pos.z * zoom);
             const shipY = cy - (state.pos.y * zoom);
 
-            // Grid
             ctx.strokeStyle = 'rgba(0, 255, 65, 0.1)';
             ctx.lineWidth = 1;
             for (let x = 0; x < canvas.width; x += 50) {
@@ -812,25 +852,19 @@
                 ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
             }
 
-            // Station target line (vertical green bar)
             ctx.strokeStyle = 'var(--dark-green)';
             ctx.lineWidth = 4;
             ctx.beginPath(); ctx.moveTo(sX, cy - 100); ctx.lineTo(sX, cy + 100); ctx.stroke();
 
-            // Alignment zone (soft white fill on station)
             ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
             ctx.fillRect(sX - 10, cy - ALIGN_TOLERANCE * zoom, 10, ALIGN_TOLERANCE * zoom * 2);
 
-            // --- INDICATOR LINES (like old version) ---
-
-            // Horizontal center line (docking axis)
             ctx.setLineDash([15, 6]);
             ctx.strokeStyle = 'rgba(0, 255, 65, 0.18)';
             ctx.lineWidth = 1;
             ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(canvas.width, cy); ctx.stroke();
             ctx.setLineDash([]);
 
-            // Y-deviation indicator - vertical line from ship Y to center axis
             if (Math.abs(shipY - cy) > 2) {
                 ctx.strokeStyle = Math.abs(state.pos.y) < ALIGN_TOLERANCE
                     ? 'rgba(255, 255, 255, 0.5)'
@@ -840,20 +874,17 @@
                 ctx.beginPath(); ctx.moveTo(shipX, cy); ctx.lineTo(shipX, shipY); ctx.stroke();
                 ctx.setLineDash([]);
 
-                // Y-dev label
                 ctx.fillStyle = Math.abs(state.pos.y) < ALIGN_TOLERANCE ? '#aaffaa' : '#ff8888';
                 ctx.font = '9px Courier New';
                 ctx.fillText(`Y: ${state.pos.y.toFixed(2)}m`, shipX + 5, (cy + shipY) / 2);
             }
 
-            // Distance line from ship to station with ticks
             ctx.setLineDash([10, 5]);
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
             ctx.lineWidth = 1;
             ctx.beginPath(); ctx.moveTo(shipX, shipY); ctx.lineTo(sX, shipY); ctx.stroke();
             ctx.setLineDash([]);
 
-            // Tick marks along distance line every 20m
             const tickInterval = 20;
             for (let d = tickInterval; d < state.pos.z; d += tickInterval) {
                 const tx = sX - (d * zoom);
@@ -867,12 +898,10 @@
                 }
             }
 
-            // Range label
             ctx.fillStyle = '#fff';
             ctx.font = '10px Courier New';
             ctx.fillText(`DIST: ${state.pos.z.toFixed(1)}M`, shipX, shipY + 30);
 
-            // Velocity arrow on ship
             const vArrowLen = state.vel.z * zoom * 80;
             ctx.strokeStyle = 'var(--hud-amber)';
             ctx.lineWidth = 1.5;
@@ -893,18 +922,15 @@
             ctx.font = '9px Courier New';
             ctx.fillText(`VZ:${(state.vel.z * 10).toFixed(2)}`, shipX - 2, shipY - 25);
 
-            // --- SHIP BODY ---
             ctx.save();
             ctx.translate(shipX, shipY);
             ctx.strokeStyle = Math.abs(state.pos.y) < ALIGN_TOLERANCE ? '#fff' : 'var(--neon-green)';
             ctx.lineWidth = 2;
-            ctx.strokeRect(-40, -12, 35, 24);  // Main body
-            ctx.strokeRect(-5, -6, 12, 12);    // Nose
+            ctx.strokeRect(-40, -12, 35, 24);
+            ctx.strokeRect(-5, -6, 12, 12);
 
-            // --- THRUSTER INDICATORS (side view, like old version) ---
             ctx.fillStyle = '#fff';
 
-            // W / ArrowUp = push ship up (bottom thruster fires)
             if (keys['KeyW'] || keys['ArrowUp']) {
                 ctx.beginPath();
                 ctx.moveTo(-22, 15); ctx.lineTo(-17, 32); ctx.lineTo(-12, 15);
@@ -914,7 +940,6 @@
                 ctx.fillText("RCS-BTM", -36, 42);
                 ctx.fillStyle = '#fff';
             }
-            // S / ArrowDown = push ship down (top thruster fires)
             if (keys['KeyS'] || keys['ArrowDown']) {
                 ctx.beginPath();
                 ctx.moveTo(-22, -15); ctx.lineTo(-17, -32); ctx.lineTo(-12, -15);
@@ -924,7 +949,6 @@
                 ctx.fillText("RCS-TOP", -36, -36);
                 ctx.fillStyle = '#fff';
             }
-            // D / ArrowRight = move toward station (rear thruster fires, pushes forward)
             if (keys['KeyD'] || keys['ArrowRight']) {
                 ctx.beginPath();
                 ctx.moveTo(-45, -8); ctx.lineTo(-65, 0); ctx.lineTo(-45, 8);
@@ -934,7 +958,6 @@
                 ctx.fillText("RCS-AFT", -82, 3);
                 ctx.fillStyle = '#fff';
             }
-            // A / ArrowLeft = brake / move away (front thruster fires)
             if (keys['KeyA'] || keys['ArrowLeft']) {
                 ctx.beginPath();
                 ctx.moveTo(8, -5); ctx.lineTo(25, 0); ctx.lineTo(8, 5);
@@ -947,7 +970,6 @@
 
             ctx.restore();
 
-            // Alignment zone bracket labels
             ctx.fillStyle = 'rgba(0, 255, 65, 0.4)';
             ctx.font = '9px Courier New';
             ctx.fillText(`ALIGN ZONE`, sX + 5, cy - ALIGN_TOLERANCE * zoom - 4);
