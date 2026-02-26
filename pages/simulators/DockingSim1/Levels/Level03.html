@@ -1,0 +1,1333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!--
+      NASA JPL Class-D Docking Simulator — LEVEL 3
+      "OPERATION LIFELINE"
+      ─────────────────────────────────────────────────────────────
+      MISSION PROFILE:
+        PHASE 1 — OUTBOUND TRANSIT (0m → 180m away from station)
+          Fly OUT through sparse asteroid field toward stranded EVA crew.
+          Avoid tumbling debris. Manage fuel for round trip.
+
+        PHASE 2 — EVA RESCUE (at 180m range)
+          Hold within 2m of astronaut for 3 seconds.
+          Debris swarm actively drifting around survivor.
+          Match near-zero relative velocity to achieve lock.
+
+        PHASE 3 — INBOUND RETURN (180m → 0m toward home station)
+          Fly BACK through denser debris + random-direction debris cloud.
+          New hazard: debris knocked loose by rescue, random headings.
+          Crossing hazard sats now on tighter orbits.
+
+        PHASE 4 — FINAL APPROACH & DOCK
+          Orion probe must align with home station collar.
+          Same precision docking as Level 1 but with rescue pod physics.
+          Carry survivor = heavier vessel, slightly reduced thrust authority.
+      ─────────────────────────────────────────────────────────────
+      NEW vs LVL1/2:
+        • Mission REVERSAL — fly out then return (first time in series)
+        • Stranded astronaut visual (EVA suit, MMU pack, distress beacon)
+        • Rescue lock mechanic (hold position timer)
+        • Random-direction debris cloud (not corridor-aligned)
+        • Orion-style rescue capsule target visual (new docking probe)
+        • Survivor-carried mass penalty after rescue (-12% thrust)
+        • Fuel efficiency improved: 0.015/frame vs 0.02 (reward skill)
+        • 5 debris hazard satellites on crossing orbits
+        • "Gravity gradient" — very slow Z drift after turnaround
+      ─────────────────────────────────────────────────────────────
+    -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NASA JPL — LEVEL 3: OPERATION LIFELINE</title>
+    <style>
+        :root {
+            --ng:   #00ff41;
+            --ng2:  #00cc33;
+            --dg:   #003b00;
+            --bg:   #02040a;
+            --red:  #ff3333;
+            --amb:  #ffb100;
+            --cya:  #00e5ff;
+            --gold: #ffd700;
+            --mag:  #ff44aa;
+            --dim:  rgba(0,255,65,0.10);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: var(--bg);
+            color: var(--ng);
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            user-select: none;
+        }
+        #wrap {
+            position: relative;
+            width: 95vw;
+            max-width: 980px;
+            aspect-ratio: 16/9;
+            border: 3px solid #111820;
+            border-radius: 8px;
+            background: #000;
+            overflow: hidden;
+            cursor: crosshair;
+            box-shadow: 0 0 80px rgba(0,20,40,0.9), inset 0 0 140px rgba(0,10,20,0.5);
+        }
+        canvas { display: block; width: 100%; height: 100%; }
+        .ov {
+            position: absolute;
+            pointer-events: none;
+            font-weight: bold;
+            letter-spacing: 1.2px;
+            text-transform: uppercase;
+            font-size: 12px;
+        }
+        #telem {
+            top: 18px; left: 18px;
+            background: rgba(0,5,10,0.90);
+            border: 1px solid #0a1a2a;
+            padding: 10px 14px;
+            line-height: 1.6;
+            z-index: 15;
+        }
+        #status {
+            top: 18px; right: 18px;
+            text-align: right;
+            background: rgba(0,5,10,0.90);
+            border: 1px solid #0a1a2a;
+            padding: 10px 14px;
+            line-height: 1.6;
+            z-index: 15;
+        }
+        #phase-bar {
+            position: absolute;
+            bottom: 18px; left: 50%;
+            transform: translateX(-50%);
+            display: flex; gap: 5px;
+            z-index: 15; pointer-events: none;
+        }
+        .ph {
+            padding: 4px 12px;
+            border: 1px solid #0a1a2a;
+            background: rgba(0,5,10,0.90);
+            font-size: 10px; font-weight: bold;
+            letter-spacing: 1px; color: #1a2a3a;
+        }
+        .ph.active { color: var(--ng);  border-color: var(--ng); }
+        .ph.done   { color: #224422;    border-color: #122212; }
+        .ph.rescue { color: var(--gold);border-color: var(--gold); }
+        .scanlines {
+            position: absolute; inset: 0;
+            background: repeating-linear-gradient(
+                0deg,rgba(0,0,0,0) 0px,rgba(0,0,0,0) 2px,
+                rgba(0,0,0,0.15) 2px,rgba(0,0,0,0.15) 3px
+            );
+            z-index: 20; pointer-events: none; opacity: 0.35;
+        }
+        .vignette {
+            position: absolute; inset: 0;
+            background: radial-gradient(ellipse at center,transparent 52%,rgba(0,0,0,0.82) 100%);
+            z-index: 21; pointer-events: none;
+        }
+        #modal {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%,-50%);
+            background: #000;
+            border: 2px solid var(--ng);
+            padding: 36px 50px;
+            text-align: center;
+            z-index: 100; min-width: 400px;
+            box-shadow: 0 0 100px rgba(0,0,0,0.98), 0 0 40px rgba(0,255,65,0.08);
+        }
+        #modal h1 { margin: 0 0 10px; font-size: 20px; letter-spacing: 2px; }
+        #modal p  { font-size: 12px; line-height: 1.7; color: #6a9a7a; margin-bottom: 6px; }
+        button {
+            background: transparent; color: var(--ng);
+            border: 1px solid var(--ng);
+            padding: 12px 28px; cursor: pointer;
+            font-family: 'Courier New', monospace;
+            font-size: 14px; font-weight: bold;
+            margin-top: 20px; transition: all 0.18s;
+        }
+        button:hover { background: var(--ng); color: #000; box-shadow: 0 0 22px var(--ng); }
+        #flash { position: absolute; inset: 0; opacity: 0; pointer-events: none; z-index: 25; transition: opacity 0.07s; }
+        .warn { color: var(--red);  animation: blink .5s infinite; }
+        .ok   { color: #fff; }
+        .crit { color: var(--amb);  animation: blink .25s infinite; }
+        .info { color: var(--cya); }
+        .gold { color: var(--gold); animation: blink .6s infinite; }
+        @keyframes blink { 50% { opacity: 0.07; } }
+        #hint {
+            margin-top: 12px;
+            font-size: 11px; color: #2a3a4a;
+            text-align: center; line-height: 1.7;
+        }
+    </style>
+</head>
+<body>
+<div id="wrap">
+    <div id="flash"></div>
+    <div class="scanlines"></div>
+    <div class="vignette"></div>
+
+    <div id="telem" class="ov">
+        &gt; RANGE:  <span id="v-z">0.00</span>m<br>
+        &gt; X-DEV:  <span id="v-x">0.00</span>m<br>
+        &gt; Y-DEV:  <span id="v-y">0.00</span>m<br>
+        &gt; VEL-Z:  <span id="v-vz">0.00</span>m/s<br>
+        &gt; FUEL:   <span id="v-fuel">100</span>%<br>
+        &gt; PHASE:  <span id="v-phase">---</span>
+    </div>
+
+    <div id="status" class="ov">
+        [ LVL3 · OPERATION LIFELINE ]<br>
+        EVA-DIST: <span id="v-evad">---</span>m<br>
+        LOCK-TMR: <span id="v-lock">---</span><br>
+        SURVIVOR: <span id="v-surv">MISSING</span><br>
+        HEADING:  <span id="v-head">OUTBOUND</span><br>
+        <span id="align-stat">AWAITING INIT</span>
+    </div>
+
+    <div id="phase-bar">
+        <div class="ph" id="ph1">① OUTBOUND</div>
+        <div class="ph" id="ph2">② EVA RESCUE</div>
+        <div class="ph" id="ph3">③ RETURN</div>
+        <div class="ph" id="ph4">④ APPROACH</div>
+        <div class="ph" id="ph5">⑤ DOCK</div>
+    </div>
+
+    <canvas id="c"></canvas>
+
+    <div id="modal">
+        <h1 id="m-title" style="color:var(--ng)">LEVEL 3 — OPERATION LIFELINE</h1>
+        <p id="m-desc">
+            EVA CREW MEMBER STRANDED — MMU THRUSTER FAILURE.<br>
+            Fly out through asteroid field → rescue survivor at 180m<br>
+            → navigate return debris field → dock at home station.<br><br>
+            <span style="color:var(--gold)">★ Carrying survivor reduces thrust authority by 12%.</span><br>
+            <span style="color:var(--amb)">⚠ Debris impact = mission abort. Round-trip fuel budget.</span>
+        </p>
+        <p style="color:#2a4a3a; font-size:11px">
+            WASD/ARROWS — translate &nbsp;|&nbsp; Q/E — fore/aft &nbsp;|&nbsp; SPACE — brake<br>
+            [V] view &nbsp;|&nbsp; [T] input mode &nbsp;|&nbsp; HOLD POSITION NEAR EVA CREW TO RESCUE
+        </p>
+        <button onclick="startSim()">INITIATE RESCUE MISSION</button>
+    </div>
+</div>
+<div id="hint">
+    <b>[V]</b> CYCLE VIEW &nbsp;|&nbsp; <b>[T]</b> MOUSE/KBD &nbsp;|&nbsp; <b>[SPACE]</b> BRAKE &nbsp;|&nbsp;
+    OUTBOUND: Q=forward E=brake &nbsp;|&nbsp; RETURN: E=forward Q=brake
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// CORE SETUP
+// ═══════════════════════════════════════════════════════════════
+const canvas = document.getElementById('c');
+const wrap   = document.getElementById('wrap');
+const ctx    = canvas.getContext('2d');
+const flash  = document.getElementById('flash');
+const modal  = document.getElementById('modal');
+
+// ── CONSTANTS ──────────────────────────────────────────────────
+const THRUST_BASE    = 0.00070;   // base thrust
+const THRUST_LOADED  = 0.00062;   // -12% when carrying survivor
+const BRAKE          = 0.92;
+const DOCK_RANGE     = 0.38;
+const MAX_DOCK_SPD   = 0.28;
+const ALIGN_TOL      = 0.45;
+const GUIDE_HALF     = 38;
+const EVA_Z          = 180;       // how far out the astronaut is
+const EVA_TOL        = 2.8;       // must be within this to rescue
+const RESCUE_HOLD    = 180;       // frames to hold (~3s at 60fps)
+const FUEL_DRAIN     = 0.015;     // per-frame when thrusting (reduced vs L2)
+const FUEL_BRAKE     = 0.08;
+
+// ── STARS ──────────────────────────────────────────────────────
+let stars = null;
+function initStars() {
+    stars = [];
+    for (let i = 0; i < 280; i++) {
+        stars.push({
+            x: Math.random()*2-1, y: Math.random()*2-1,
+            sz: Math.random(), b: 0.2 + Math.random()*0.8,
+            twinkle: Math.random()*Math.PI*2
+        });
+    }
+}
+function drawStars(cx, cy) {
+    if (!stars) initStars();
+    for (const s of stars) {
+        s.twinkle += 0.015;
+        const alpha = s.b * (0.25 + 0.12 * Math.sin(s.twinkle));
+        const sx = cx + s.x * canvas.width  * 0.65;
+        const sy = cy + s.y * canvas.height * 0.65;
+        ctx.fillStyle = `rgba(210,225,255,${alpha})`;
+        ctx.fillRect(sx, sy, s.sz*1.6, s.sz*1.6);
+    }
+}
+
+// ── EARTH LIMB (distant glow at bottom) ──────────────────────
+function drawEarthLimb(cy) {
+    const grad = ctx.createRadialGradient(canvas.width/2, canvas.height+80, 60, canvas.width/2, canvas.height+80, 320);
+    grad.addColorStop(0,   'rgba(20, 80, 180, 0.18)');
+    grad.addColorStop(0.5, 'rgba(10, 40, 120, 0.08)');
+    grad.addColorStop(1,   'rgba(0,   0,   0,  0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, cy, canvas.width, canvas.height - cy);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AUDIO
+// ═══════════════════════════════════════════════════════════════
+let audio = null;
+let thrGain, proxGain, proxFilt, warnOsc, warnGain, rescueOsc, rescueGain;
+
+function mkNoise() {
+    const sz = 2 * audio.sampleRate;
+    const b  = audio.createBuffer(1, sz, audio.sampleRate);
+    const d  = b.getChannelData(0);
+    for (let i = 0; i < sz; i++) d[i] = Math.random()*2-1;
+    return b;
+}
+function initAudio() {
+    if (audio) return;
+    audio = new (window.AudioContext || window.webkitAudioContext)();
+    const nb = mkNoise();
+
+    // Cabin rumble
+    const amb=audio.createBufferSource(); amb.buffer=nb; amb.loop=true;
+    const af=audio.createBiquadFilter(); af.type='lowpass'; af.frequency.value=110;
+    const ag=audio.createGain(); ag.gain.value=0.065;
+    amb.connect(af); af.connect(ag); ag.connect(audio.destination); amb.start();
+
+    // Prox hiss
+    const pn=audio.createBufferSource(); pn.buffer=nb; pn.loop=true;
+    proxFilt=audio.createBiquadFilter(); proxFilt.type='bandpass'; proxFilt.frequency.value=2000;
+    proxGain=audio.createGain(); proxGain.gain.value=0;
+    pn.connect(proxFilt); proxFilt.connect(proxGain); proxGain.connect(audio.destination); pn.start();
+
+    // Thruster
+    const tn=audio.createBufferSource(); tn.buffer=nb; tn.loop=true;
+    const tf=audio.createBiquadFilter(); tf.type='lowpass'; tf.frequency.value=750;
+    thrGain=audio.createGain(); thrGain.gain.value=0;
+    tn.connect(tf); tf.connect(thrGain); thrGain.connect(audio.destination); tn.start();
+
+    // Warning beep
+    warnOsc=audio.createOscillator(); warnOsc.type='square'; warnOsc.frequency.value=660;
+    warnGain=audio.createGain(); warnGain.gain.value=0;
+    warnOsc.connect(warnGain); warnGain.connect(audio.destination); warnOsc.start();
+
+    // Rescue proximity tone (rising ping when near astronaut)
+    rescueOsc=audio.createOscillator(); rescueOsc.type='sine'; rescueOsc.frequency.value=440;
+    rescueGain=audio.createGain(); rescueGain.gain.value=0;
+    rescueOsc.connect(rescueGain); rescueGain.connect(audio.destination); rescueOsc.start();
+}
+function setThr(on)      { if (!thrGain)   return; thrGain.gain.setTargetAtTime(on?0.32:0,    audio.currentTime, 0.03); }
+function setWarn(on)     { if (!warnGain)  return; warnGain.gain.setTargetAtTime(on?0.10:0,   audio.currentTime, 0.05); }
+function setRescueTone(dist) {
+    if (!rescueGain) return;
+    const t  = audio.currentTime;
+    const i  = Math.max(0, 1 - dist/30);
+    rescueGain.gain.setTargetAtTime(i*0.18, t, 0.12);
+    rescueOsc.frequency.setTargetAtTime(380 + i*520, t, 0.1);
+}
+function setProx(r) {
+    if (!proxGain) return;
+    const t = audio.currentTime;
+    const i = Math.max(0, 1 - r/35);
+    proxGain.gain.setTargetAtTime(i*0.16, t, 0.1);
+    proxFilt.frequency.setTargetAtTime(1400 + i*3000, t, 0.1);
+}
+
+function playImpact() {
+    if (!audio) return;
+    const t = audio.currentTime;
+    const nb2=mkNoise();
+    const s=audio.createBufferSource(); s.buffer=nb2;
+    const f=audio.createBiquadFilter(); f.type='lowpass'; f.frequency.setValueAtTime(450,t); f.frequency.exponentialRampToValueAtTime(50,t+0.85);
+    const g=audio.createGain(); g.gain.setValueAtTime(2.2,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.85);
+    s.connect(f); f.connect(g); g.connect(audio.destination); s.start(t); s.stop(t+0.85);
+    const o=audio.createOscillator(); o.type='sine'; o.frequency.setValueAtTime(85,t); o.frequency.exponentialRampToValueAtTime(15,t+0.3);
+    const og=audio.createGain(); og.gain.setValueAtTime(1.3,t); og.gain.exponentialRampToValueAtTime(0.001,t+0.3);
+    o.connect(og); og.connect(audio.destination); o.start(t); o.stop(t+0.3);
+}
+
+function playRescue() {
+    if (!audio) return;
+    const t = audio.currentTime;
+    // Rising arpeggio + relief chord
+    [330,440,550,660,880].forEach((f,i)=>{
+        const o=audio.createOscillator(); o.type='sine'; o.frequency.value=f;
+        const g=audio.createGain(); g.gain.setValueAtTime(0,t+i*0.09);
+        g.gain.linearRampToValueAtTime(0.3,t+i*0.09+0.05);
+        g.gain.exponentialRampToValueAtTime(0.001,t+i*0.09+0.5);
+        o.connect(g); g.connect(audio.destination); o.start(t+i*0.09); o.stop(t+i*0.09+0.5);
+    });
+}
+
+function playDock() {
+    if (!audio) return;
+    const t = audio.currentTime;
+    [[320,0.0,0.6,0.9],[240,0.06,0.4,0.5],[180,0.14,0.3,0.3]].forEach(([f,st,dur,vol])=>{
+        const o1=audio.createOscillator(),o2=audio.createOscillator(),g=audio.createGain();
+        o1.type='square'; o2.type='sawtooth';
+        o1.frequency.setValueAtTime(f,t+st); o1.frequency.exponentialRampToValueAtTime(f*0.5,t+st+dur);
+        o2.frequency.setValueAtTime(f*1.5,t+st); o2.frequency.exponentialRampToValueAtTime(f*0.8,t+st+dur);
+        g.gain.setValueAtTime(vol,t+st); g.gain.exponentialRampToValueAtTime(0.001,t+st+dur);
+        o1.connect(g); o2.connect(g); g.connect(audio.destination);
+        o1.start(t+st); o2.start(t+st); o1.stop(t+st+dur); o2.stop(t+st+dur);
+    });
+    // Pressurisation hiss
+    const nb2=mkNoise();
+    const as=audio.createBufferSource(); as.buffer=nb2;
+    const af2=audio.createBiquadFilter(); af2.type='bandpass';
+    af2.frequency.setValueAtTime(300,t+0.5); af2.frequency.exponentialRampToValueAtTime(1600,t+2);
+    af2.frequency.exponentialRampToValueAtTime(350,t+3.5);
+    const ag2=audio.createGain(); ag2.gain.setValueAtTime(0,t+0.5);
+    ag2.gain.linearRampToValueAtTime(0.28,t+1.2); ag2.gain.exponentialRampToValueAtTime(0.001,t+3.5);
+    as.connect(af2); af2.connect(ag2); ag2.connect(audio.destination); as.start(t+0.5); as.stop(t+3.5);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DEBRIS SYSTEM
+// ═══════════════════════════════════════════════════════════════
+let debrisOut   = [];   // outbound corridor debris
+let debrisCloud = [];   // random-direction debris around EVA position
+let hazardSats  = [];
+
+function mkAsteroid(zMin, zMax, xRange, yRange) {
+    const sides = 5 + Math.floor(Math.random()*6);
+    const r     = 2 + Math.random()*7;
+    const verts = [];
+    for (let i=0;i<sides;i++) {
+        const a=(i/sides)*Math.PI*2;
+        const d=r*(0.6+Math.random()*0.4);
+        verts.push({x:Math.cos(a)*d, y:Math.sin(a)*d});
+    }
+    return {
+        pos:  {x:(Math.random()-.5)*xRange, y:(Math.random()-.5)*yRange, z:zMin+Math.random()*(zMax-zMin)},
+        vel:  {x:(Math.random()-.5)*0.009, y:(Math.random()-.5)*0.007, z:(Math.random()-.5)*0.005},
+        rot:0, rotV:(Math.random()-.5)*0.025, verts, r, type:'asteroid'
+    };
+}
+function mkDebris(zMin, zMax, randomDir) {
+    const spd = randomDir ? 0.025 + Math.random()*0.02 : 0.012 + Math.random()*0.01;
+    const dir = randomDir ? Math.random()*Math.PI*2 : 0;
+    return {
+        pos:  {x:(Math.random()-.5)*55, y:(Math.random()-.5)*35, z:zMin+Math.random()*(zMax-zMin)},
+        vel:  {
+            x: randomDir ? Math.cos(dir)*spd : (Math.random()-.5)*0.014,
+            y: randomDir ? Math.sin(dir)*spd : (Math.random()-.5)*0.010,
+            z: (Math.random()-.5)*0.008
+        },
+        rot:0, rotV:(Math.random()-.5)*0.06,
+        size:1.5+Math.random()*4, type:'debris'
+    };
+}
+function mkHazSat(z) {
+    const side = Math.random() > 0.5 ? 1 : -1;
+    return {
+        pos: {x: side*50, y:(Math.random()-.5)*25, z},
+        vel: {x:-side*(0.012+Math.random()*0.009), y:(Math.random()-.5)*0.005, z:-0.03+Math.random()*0.015},
+        rot:0, rotV:0.009, radius:7, type:'hazardSat'
+    };
+}
+
+function spawnAll() {
+    debrisOut   = [];
+    debrisCloud = [];
+    hazardSats  = [];
+    // Outbound asteroid belt ~60-130m
+    for (let i=0;i<8;i++)  debrisOut.push(mkAsteroid(60, 130, 70, 50));
+    // Scattered outbound debris
+    for (let i=0;i<14;i++) debrisOut.push(mkDebris(30, 170, false));
+    // Dense random-direction cloud around EVA zone 155-205m
+    for (let i=0;i<22;i++) debrisCloud.push(mkDebris(155, 205, true));
+    // Extra inbound debris (added after rescue)
+    // 5 hazard sats
+    for (let i=0;i<5;i++) hazardSats.push(mkHazSat(40 + i*28));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// EVA ASTRONAUT
+// ═══════════════════════════════════════════════════════════════
+let evaPos  = {x:0, y:0, z:EVA_Z};
+let evaDrift= {x:0.004, y:-0.003};  // slow drift
+let evaAccum= {x:0, y:0};
+let beaconT = 0;
+
+// ═══════════════════════════════════════════════════════════════
+// HOME STATION (dock target on return)
+// ═══════════════════════════════════════════════════════════════
+// Station is at Z=0. When returning, player's Z decreases toward 0.
+
+// ═══════════════════════════════════════════════════════════════
+// PLAYER STATE
+// ═══════════════════════════════════════════════════════════════
+let S = {
+    pos: {x:0, y:0, z:2},        // starts very close to station, flies OUT
+    vel: {x:0, y:0, z:0.12},     // initial outbound velocity
+    fuel: 100,
+    active: false,
+    view: 'FPV',
+    input: 'KEYBOARD',
+    frame: 0,
+    phase: 1,   // 1=outbound 2=EVA rescue 3=return 4=approach 5=dock
+    rescueHold: 0,          // frames held near astronaut
+    survivorAboard: false,
+    debrisWarn: false,
+    evaDist: 9999,
+    inboundDebrisSpawned: false
+};
+
+const keys  = {};
+const mouse = {x:0, y:0, in:false};
+
+// ═══════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════
+function init() {
+    window.addEventListener('keydown', e=>{
+        keys[e.code]=true;
+        if (e.code==='KeyT') S.input=S.input==='KEYBOARD'?'MOUSE':'KEYBOARD';
+        if (e.code==='KeyV') S.view=S.view==='FPV'?'SIDE':'FPV';
+    });
+    window.addEventListener('keyup', e=>keys[e.code]=false);
+    wrap.addEventListener('mousemove', e=>{
+        const r=wrap.getBoundingClientRect();
+        mouse.x=(e.clientX-(r.left+r.width/2))/(r.width/2);
+        mouse.y=(e.clientY-(r.top+r.height/2))/(r.height/2);
+        mouse.in=true;
+    });
+    wrap.addEventListener('mouseleave', ()=>mouse.in=false);
+    resize(); window.addEventListener('resize', resize);
+    requestAnimationFrame(loop);
+}
+
+function resize() { canvas.width=canvas.offsetWidth; canvas.height=canvas.offsetHeight; }
+
+function startSim() {
+    initAudio();
+    S.pos  = {x:(Math.random()-.5)*4, y:(Math.random()-.5)*3, z:2};
+    S.vel  = {x:0, y:0, z:0.12};
+    S.fuel = 100;
+    S.frame= 0;
+    S.phase= 1;
+    S.active= true;
+    S.rescueHold= 0;
+    S.survivorAboard= false;
+    S.debrisWarn= false;
+    S.inboundDebrisSpawned= false;
+
+    // Reset EVA pos
+    evaPos  = {x:(Math.random()-.5)*6, y:(Math.random()-.5)*4, z:EVA_Z};
+    evaDrift= {x:0.003+Math.random()*0.003, y:-0.002-Math.random()*0.002};
+    evaAccum= {x:0, y:0};
+
+    spawnAll();
+    setPhaseUI(1);
+    flash.style.background=''; flash.style.opacity=0;
+    modal.style.display='none';
+}
+
+function setPhaseUI(p) {
+    S.phase=p;
+    const ids=['ph1','ph2','ph3','ph4','ph5'];
+    ids.forEach((id,i)=>{
+        const el=document.getElementById(id);
+        el.className='ph';
+        if (i+1<p)  el.classList.add('done');
+        if (i+1===p) el.classList.add(p===2?'rescue':'active');
+    });
+    const labels=['OUTBOUND','EVA RESCUE','RETURN','APPROACH','DOCK'];
+    document.getElementById('v-phase').innerText=labels[p-1];
+    document.getElementById('v-head').innerText=p<=2?'OUTBOUND':'INBOUND';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// UPDATE
+// ═══════════════════════════════════════════════════════════════
+function update() {
+    if (!S.active) return;
+    S.frame++;
+    let thr=false;
+    const T = S.survivorAboard ? THRUST_LOADED : THRUST_BASE;
+    const hasFuel = S.fuel > 0;
+
+    // ── INPUT ──
+    if (S.input==='KEYBOARD') {
+        if (S.view==='FPV') {
+            if (keys['KeyW']||keys['ArrowUp'])    { if(hasFuel){S.vel.y+=T;}  thr=true; }
+            if (keys['KeyS']||keys['ArrowDown'])  { if(hasFuel){S.vel.y-=T;}  thr=true; }
+            if (keys['KeyA']||keys['ArrowLeft'])  { if(hasFuel){S.vel.x-=T;}  thr=true; }
+            if (keys['KeyD']||keys['ArrowRight']) { if(hasFuel){S.vel.x+=T;}  thr=true; }
+            if (keys['KeyQ']) { if(hasFuel){S.vel.z+=T;} thr=true; }
+            if (keys['KeyE']) { if(hasFuel){S.vel.z-=T;} thr=true; }
+        } else {
+            if (keys['KeyW']||keys['ArrowUp'])    { if(hasFuel){S.vel.y+=T;}  thr=true; }
+            if (keys['KeyS']||keys['ArrowDown'])  { if(hasFuel){S.vel.y-=T;}  thr=true; }
+            if (keys['KeyA']||keys['ArrowLeft'])  { if(hasFuel){S.vel.z+=T;}  thr=true; }
+            if (keys['KeyD']||keys['ArrowRight']) { if(hasFuel){S.vel.z-=T;}  thr=true; }
+        }
+    } else if (mouse.in) {
+        if(hasFuel){S.vel.x+=mouse.x*0.00022; S.vel.y-=mouse.y*0.00022;}
+        thr=true;
+    }
+    if (keys['Space']) {
+        S.vel.x*=BRAKE; S.vel.y*=BRAKE; S.vel.z*=BRAKE;
+        if(hasFuel) S.fuel-=FUEL_BRAKE;
+        thr=true;
+    }
+    setThr(thr);
+    if (thr && hasFuel) S.fuel-=FUEL_DRAIN;
+
+    // ── INTEGRATE ──
+    S.pos.x+=S.vel.x; S.pos.y+=S.vel.y; S.pos.z+=S.vel.z;
+
+    // ── EVA DRIFT ──
+    evaAccum.x+=evaDrift.x; evaAccum.y+=evaDrift.y;
+    evaPos.x=evaAccum.x; evaPos.y=evaAccum.y;
+    beaconT+=0.06;
+
+    // ── DEBRIS PHYSICS ──
+    const allDebris=[...debrisOut,...debrisCloud];
+    for (const d of allDebris) {
+        d.pos.x+=d.vel.x; d.pos.y+=d.vel.y; d.pos.z+=d.vel.z; d.rot+=d.rotV;
+        if (d.pos.z>220) d.pos.z=5;
+        if (d.pos.z<0)   d.pos.z=215;
+    }
+    for (const hs of hazardSats) {
+        hs.pos.x+=hs.vel.x; hs.pos.y+=hs.vel.y; hs.pos.z+=hs.vel.z; hs.rot+=hs.rotV;
+        if (hs.pos.z<0||hs.pos.z>220) { hs.vel.z*=-1; }
+        if (Math.abs(hs.pos.x)>75) hs.vel.x*=-1;
+    }
+
+    // ── PHASE TRANSITIONS ──
+    const evaDistXY = Math.sqrt((S.pos.x-evaPos.x)**2+(S.pos.y-evaPos.y)**2);
+    const evaDistZ  = Math.abs(S.pos.z - EVA_Z);
+    const evaDist3D = Math.sqrt(evaDistXY**2 + evaDistZ**2);
+    S.evaDist = evaDist3D;
+    setRescueTone(S.phase===1||S.phase===2 ? evaDist3D : 9999);
+
+    // Phase 1→2: close enough to EVA zone
+    if (S.phase===1 && S.pos.z >= EVA_Z-8) setPhaseUI(2);
+
+    // Phase 2: rescue hold
+    if (S.phase===2) {
+        if (evaDist3D < EVA_TOL) {
+            S.rescueHold++;
+            if (S.rescueHold >= RESCUE_HOLD) {
+                S.survivorAboard=true;
+                playRescue();
+                setPhaseUI(3);
+                // Spawn extra inbound debris
+                if (!S.inboundDebrisSpawned) {
+                    for (let i=0;i<12;i++) debrisOut.push(mkDebris(10,160,true));
+                    S.inboundDebrisSpawned=true;
+                }
+                // Reverse velocity slightly — suggest turnaround
+                S.vel.z = -Math.abs(S.vel.z)*0.5;
+            }
+        } else {
+            S.rescueHold=Math.max(0, S.rescueHold-2); // decay if drift away
+        }
+    }
+
+    // Phase 3→4: returning, close to station
+    if ((S.phase===3||S.phase===4) && S.pos.z<=18 && S.pos.z>0) setPhaseUI(4);
+
+    // Dock check
+    if (S.phase>=3 && S.pos.z<=DOCK_RANGE && S.pos.z>=-0.5) {
+        const lateralErr=Math.sqrt(S.pos.x**2+S.pos.y**2);
+        const speed=Math.abs(S.vel.z*10);
+        checkDock(speed, lateralErr);
+    }
+
+    // Out of bounds
+    if (S.pos.z>240) endMission("SIGNAL LOST","Vessel exceeded EVA operational range.");
+    if (S.pos.z<-2)  endMission("OVERSHOOT","Vessel passed station — contact imminent.");
+
+    // ── COLLISION CHECK ──
+    let minDist=9999;
+    const obstacles=[...allDebris,...hazardSats];
+    for (const d of obstacles) {
+        const dx=S.pos.x-d.pos.x, dy=S.pos.y-d.pos.y, dz=S.pos.z-d.pos.z;
+        const dist=Math.sqrt(dx*dx+dy*dy+dz*dz);
+        const cr=d.type==='hazardSat'?5.5:(d.r||d.size||3)*0.85;
+        if (dist<cr+1.2) {
+            playImpact();
+            flash.style.background='#ff0000'; flash.style.opacity=1;
+            setTimeout(()=>{flash.style.opacity=0;},220);
+            endMission("HULL BREACH",`Debris strike at ${dist.toFixed(1)}m.${S.survivorAboard?' Survivor lost.':''}`);
+            return;
+        }
+        if (dist<14) minDist=Math.min(minDist,dist);
+    }
+    S.debrisWarn = minDist<14;
+    setProx(minDist<45?minDist:45);
+    setWarn(S.fuel<=0);
+
+    // ── TELEMETRY ──
+    const zDisplay = S.phase<=2 ? Math.max(0,S.pos.z) : Math.max(0,S.pos.z);
+    document.getElementById('v-z').innerText    = zDisplay.toFixed(2);
+    document.getElementById('v-x').innerText    = S.pos.x.toFixed(2);
+    document.getElementById('v-y').innerText    = S.pos.y.toFixed(2);
+    document.getElementById('v-vz').innerText   = (S.vel.z*10).toFixed(2);
+    document.getElementById('v-fuel').innerText = Math.max(0,S.fuel).toFixed(0);
+    document.getElementById('v-evad').innerText = S.phase<=2 ? evaDist3D.toFixed(1) : '---';
+    document.getElementById('v-surv').innerText = S.survivorAboard ? 'ABOARD ✓' : (S.phase===2?'NEARBY':'MISSING');
+
+    const lockPct = S.phase===2 ? Math.min(100,(S.rescueHold/RESCUE_HOLD*100)).toFixed(0)+'%' : '---';
+    document.getElementById('v-lock').innerText = lockPct;
+
+    // ── STATUS TEXT ──
+    const as=document.getElementById('align-stat');
+    if (S.debrisWarn) {
+        as.innerHTML="<span class='warn'>⚠ DEBRIS PROXIMITY</span>";
+    } else if (S.phase===1) {
+        as.innerHTML=`<span class='info'>EVA IN ${evaDist3D.toFixed(0)}M — OUTBOUND</span>`;
+    } else if (S.phase===2) {
+        if (evaDist3D<EVA_TOL) {
+            const pct=(S.rescueHold/RESCUE_HOLD*100).toFixed(0);
+            as.innerHTML=`<span class='gold'>⬛ RESCUE LOCK ${pct}%</span>`;
+        } else {
+            as.innerHTML=`<span class='warn'>CLOSE TO SURVIVOR — HOLD ${evaDist3D.toFixed(1)}M</span>`;
+        }
+    } else if (S.phase===3) {
+        as.innerHTML="<span class='info'>SURVIVOR ABOARD — RETURN TO STATION</span>";
+    } else if (S.phase===4) {
+        const le=Math.sqrt(S.pos.x**2+S.pos.y**2);
+        const sp=Math.abs(S.vel.z*10);
+        if (le<ALIGN_TOL&&sp<MAX_DOCK_SPD) as.innerHTML="<span class='ok'>CLEAR FOR DOCK</span>";
+        else if (sp>=MAX_DOCK_SPD)         as.innerHTML="<span class='warn'>REDUCE VELOCITY</span>";
+        else                               as.innerHTML="<span class='warn'>ALIGN TO PORT</span>";
+    }
+}
+
+function checkDock(speed, lateralErr) {
+    if (!S.survivorAboard) {
+        endMission("RESCUE INCOMPLETE","Must retrieve EVA crew before docking.");
+    } else if (speed>MAX_DOCK_SPD) {
+        playImpact();
+        endMission("HARD DOCK","Approach velocity "+speed.toFixed(2)+"m/s exceeded safe limit.");
+    } else if (lateralErr>ALIGN_TOL) {
+        playImpact();
+        endMission("LATCH FAILURE","Port misalignment: "+lateralErr.toFixed(2)+"m offset.");
+    } else {
+        playDock();
+        endMission("MISSION COMPLETE ✓","Survivor aboard. Safe dock confirmed. Medical team standing by.",true);
+    }
+}
+
+function endMission(title,desc,ok=false) {
+    S.active=false; setThr(false); setWarn(false);
+    modal.style.display='block';
+    document.getElementById('m-title').innerText=title;
+    document.getElementById('m-title').style.color=ok?'var(--ng)':'var(--red)';
+    document.getElementById('m-desc').innerText=desc;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RENDERING
+// ═══════════════════════════════════════════════════════════════
+function draw() {
+    ctx.fillStyle='rgba(2,4,10,0.20)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    const cx=canvas.width/2, cy=canvas.height/2;
+
+    if (S.view==='FPV') {
+        drawStars(cx,cy);
+        drawEarthLimb(cy+60);
+        drawGridFPV(cx,cy);
+        drawDebrisFPV(cx,cy);
+        drawHazSatsFPV(cx,cy);
+        if (S.phase<=2) drawEVAFPV(cx,cy);
+        if (S.phase>=3) drawHomeStationFPV(cx,cy);
+        drawCenterGuide(cx,cy);
+        drawHUD(cx,cy);
+        drawThrHints(cx,cy);
+        drawDirectionArrow(cx,cy);
+        if (S.debrisWarn) drawDebrisWarningBorder(cx,cy);
+    } else {
+        drawSideView(cx,cy);
+    }
+}
+
+// ── FPV GRID ──────────────────────────────────────────────────
+function drawGridFPV(cx,cy) {
+    ctx.strokeStyle='rgba(0,180,255,0.025)';
+    ctx.lineWidth=1;
+    for (let i=-700;i<=700;i+=75) {
+        ctx.beginPath(); ctx.moveTo(cx+i,cy-700); ctx.lineTo(cx+i,cy+700); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(cx-700,cy+i); ctx.lineTo(cx+700,cy+i); ctx.stroke();
+    }
+}
+
+// ── PROJECT ───────────────────────────────────────────────────
+function proj(wx,wy,wz,cx,cy) {
+    const z=Math.max(0.1,wz);
+    const sc=3200/(z+8);
+    return {x:cx+wx*sc, y:cy-wy*sc, sc};
+}
+
+// ── DEBRIS FPV ────────────────────────────────────────────────
+function drawDebrisFPV(cx,cy) {
+    const allD=[...debrisOut,...debrisCloud];
+    for (const d of allD) {
+        // In outbound phase show forward debris; in return phase show return debris
+        const relX=d.pos.x-S.pos.x;
+        const relY=d.pos.y-S.pos.y;
+        const relZ=d.pos.z-S.pos.z;
+        // Show ahead in direction of travel
+        const inView = S.phase<=2 ? relZ>0 : relZ<0;
+        if (!inView && Math.abs(relZ)>5) continue;
+        if (Math.abs(relZ)>180) continue;
+        const viewZ=Math.abs(relZ);
+        const {x,y,sc}=proj(relX,relY,viewZ+0.1,cx,cy);
+        if (x<-70||x>canvas.width+70||y<-70||y>canvas.height+70) continue;
+        const dist3=Math.sqrt(relX*relX+relY*relY+relZ*relZ);
+        const bright=Math.min(1,12/Math.max(1,dist3));
+        ctx.save(); ctx.translate(x,y); ctx.rotate(d.rot);
+        if (d.type==='asteroid') {
+            ctx.beginPath();
+            d.verts.forEach((v,i)=>{
+                const vx=v.x*sc*0.038, vy=v.y*sc*0.038;
+                i===0?ctx.moveTo(vx,vy):ctx.lineTo(vx,vy);
+            });
+            ctx.closePath();
+            ctx.strokeStyle=`rgba(110,150,90,${bright*0.85})`;
+            ctx.fillStyle  =`rgba(35,55,25,${bright*0.45})`;
+            ctx.lineWidth=1; ctx.fill(); ctx.stroke();
+        } else {
+            const sz=d.size*sc*0.014;
+            ctx.strokeStyle=`rgba(170,150,110,${bright*0.75})`;
+            ctx.lineWidth=1;
+            ctx.strokeRect(-sz,-sz*.4,sz*2,sz*.8);
+            ctx.beginPath(); ctx.moveTo(-sz*1.4,0); ctx.lineTo(sz*1.4,0); ctx.stroke();
+        }
+        if (dist3<16) {
+            const p=(Math.sin(S.frame*.28+dist3)+1)/2;
+            ctx.strokeStyle=`rgba(255,80,0,${.3+p*.5})`;
+            ctx.lineWidth=1; ctx.setLineDash([3,4]);
+            ctx.beginPath(); ctx.arc(0,0,Math.max(7,(d.r||d.size||3)*sc*0.055),0,Math.PI*2); ctx.stroke();
+            ctx.setLineDash([]);
+        }
+        ctx.restore();
+    }
+}
+
+// ── HAZARD SATS FPV ───────────────────────────────────────────
+function drawHazSatsFPV(cx,cy) {
+    for (const hs of hazardSats) {
+        const relX=hs.pos.x-S.pos.x, relY=hs.pos.y-S.pos.y, relZ=hs.pos.z-S.pos.z;
+        const viewZ=Math.abs(relZ);
+        if (viewZ>180) continue;
+        const {x,y,sc}=proj(relX,relY,viewZ+0.1,cx,cy);
+        if (x<-90||x>canvas.width+90||y<-90||y>canvas.height+90) continue;
+        const dist=Math.sqrt(relX*relX+relY*relY+relZ*relZ);
+        const bright=Math.min(1,25/Math.max(1,dist));
+        ctx.save(); ctx.translate(x,y); ctx.rotate(hs.rot);
+        const bw=sc*.11, bh=sc*.045;
+        ctx.strokeStyle=`rgba(190,170,90,${bright})`;
+        ctx.fillStyle=`rgba(55,45,15,${bright*.6})`;
+        ctx.lineWidth=1.5;
+        ctx.fillRect(-bw/2,-bh/2,bw,bh); ctx.strokeRect(-bw/2,-bh/2,bw,bh);
+        ctx.strokeStyle=`rgba(90,140,210,${bright*.75})`;
+        ctx.fillStyle=`rgba(18,38,75,${bright*.5})`;
+        ctx.fillRect(-bw*1.25,-bh*.38,bw*.65,bh*.76); ctx.strokeRect(-bw*1.25,-bh*.38,bw*.65,bh*.76);
+        ctx.fillRect(bw*.6,-bh*.38,bw*.65,bh*.76); ctx.strokeRect(bw*.6,-bh*.38,bw*.65,bh*.76);
+        if (dist<28) {
+            const p=(Math.sin(S.frame*.22)+1)/2;
+            ctx.strokeStyle=`rgba(255,50,50,${.35+p*.5})`; ctx.lineWidth=1;
+            ctx.setLineDash([2,3]);
+            ctx.beginPath(); ctx.arc(0,0,bw*.85,0,Math.PI*2); ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
+            ctx.fillStyle='rgba(255,80,80,.8)'; ctx.font='8px Courier New';
+            ctx.fillText('HAZ',x+4,y-bh*2.8);
+        } else ctx.restore();
+    }
+}
+
+// ── EVA ASTRONAUT FPV ─────────────────────────────────────────
+function drawEVAFPV(cx,cy) {
+    const relX=evaPos.x-S.pos.x;
+    const relY=evaPos.y-S.pos.y;
+    const relZ=evaPos.z-S.pos.z;
+    if (relZ<0.1) return;
+    const {x,y,sc}=proj(relX,relY,relZ,cx,cy);
+    const dist=Math.sqrt(relX*relX+relY*relY+relZ*relZ);
+    const inRange=dist<EVA_TOL;
+    const pulse=(Math.sin(beaconT)+1)/2;
+    const fastPulse=(Math.sin(beaconT*3)+1)/2;
+
+    ctx.save(); ctx.translate(x,y);
+
+    // ── Beacon glow ──
+    const glow=ctx.createRadialGradient(0,0,0,0,0,sc*.5);
+    glow.addColorStop(0,`rgba(255,220,50,${0.12+pulse*0.18})`);
+    glow.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=glow;
+    ctx.beginPath(); ctx.arc(0,0,sc*.5,0,Math.PI*2); ctx.fill();
+
+    if (sc > 1) {
+        // ── EVA Suit helmet ──
+        ctx.strokeStyle=`rgba(255,255,255,${0.7+pulse*0.25})`;
+        ctx.fillStyle=`rgba(220,235,255,0.15)`;
+        ctx.lineWidth=Math.max(1, sc*0.04);
+        const hr=Math.max(3,sc*0.28);
+        ctx.beginPath(); ctx.arc(0,-hr*.3,hr,0,Math.PI*2);
+        ctx.fill(); ctx.stroke();
+
+        // Visor tint
+        ctx.fillStyle=`rgba(100,180,255,0.35)`;
+        ctx.beginPath(); ctx.arc(0,-hr*.3,hr*.65,0,Math.PI*2); ctx.fill();
+
+        // ── Suit torso ──
+        const tw=hr*1.1, th=hr*1.3;
+        ctx.strokeStyle=`rgba(240,240,255,${0.65+pulse*0.2})`;
+        ctx.fillStyle=`rgba(200,210,230,0.12)`;
+        ctx.lineWidth=Math.max(1,sc*0.035);
+        ctx.fillRect(-tw/2, hr*.4, tw, th); ctx.strokeRect(-tw/2, hr*.4, tw, th);
+
+        // Arms
+        ctx.strokeStyle=`rgba(220,225,240,0.55)`;
+        ctx.lineWidth=Math.max(1,sc*0.03);
+        ctx.beginPath(); ctx.moveTo(-tw/2,hr*.6); ctx.lineTo(-tw/2-hr*.5,hr*1.1);
+        ctx.moveTo(tw/2, hr*.6); ctx.lineTo(tw/2+hr*.5,hr*1.1);
+        ctx.stroke();
+
+        // ── MMU thruster pack ──
+        ctx.fillStyle='rgba(80,80,100,0.7)';
+        ctx.strokeStyle='rgba(140,140,180,0.6)';
+        ctx.lineWidth=Math.max(.5,sc*0.02);
+        ctx.fillRect(-tw*.7, hr*.35, tw*.22, th*.7); ctx.strokeRect(-tw*.7, hr*.35, tw*.22, th*.7);
+        ctx.fillRect(tw*.48, hr*.35, tw*.22, th*.7); ctx.strokeRect(tw*.48, hr*.35, tw*.22, th*.7);
+
+        // ── Distress beacon light ──
+        ctx.fillStyle=`rgba(255,80,80,${fastPulse*0.95})`;
+        ctx.beginPath(); ctx.arc(hr*.55,-hr*.2,Math.max(1.5,sc*0.055),0,Math.PI*2); ctx.fill();
+
+        // ── Tether line ──
+        ctx.strokeStyle=`rgba(255,220,80,${0.3+pulse*0.3})`;
+        ctx.lineWidth=Math.max(.5,sc*0.015);
+        ctx.setLineDash([sc*0.06,sc*0.04]);
+        ctx.beginPath(); ctx.moveTo(0,th+hr*.5); ctx.lineTo(tw*.3,th+hr*1.2); ctx.stroke();
+        ctx.setLineDash([]);
+    } else {
+        // Far away — just a bright dot with beacon
+        ctx.fillStyle=`rgba(255,220,50,${0.6+pulse*0.4})`;
+        ctx.beginPath(); ctx.arc(0,0,Math.max(2,sc*0.3),0,Math.PI*2); ctx.fill();
+    }
+    ctx.restore();
+
+    // ── Rescue range ring ──
+    const ringR = EVA_TOL * (3200/(Math.max(0.1,relZ)+8));
+    ctx.strokeStyle=inRange?`rgba(0,255,65,${0.5+pulse*0.4})`:`rgba(255,220,50,${0.25+pulse*0.2})`;
+    ctx.lineWidth=inRange?2:1;
+    ctx.setLineDash([4,5]);
+    ctx.beginPath(); ctx.arc(x,y,ringR,0,Math.PI*2); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Label
+    ctx.fillStyle=inRange?`rgba(0,255,65,${0.8+pulse*0.2})`:`rgba(255,220,50,${0.7+pulse*0.2})`;
+    ctx.font=`bold 9px Courier New`;
+    ctx.textAlign='center';
+    if (inRange) {
+        const pct=(S.rescueHold/RESCUE_HOLD*100).toFixed(0);
+        ctx.fillText(`⬛ RESCUE ${pct}%`,x,y-ringR-8);
+    } else {
+        ctx.fillText(`EVA-CREW  ${dist.toFixed(0)}M`,x,y-Math.max(ringR,18)-8);
+    }
+    ctx.textAlign='left';
+}
+
+// ── HOME STATION FPV (Orion-style probe docks here on return) ──
+function drawHomeStationFPV(cx,cy) {
+    // Player is returning, station is at z=0, player.z decreasing toward 0
+    // Display the home station "ahead" = station is behind us geometrically
+    // but since we're flying toward z=0, the station is at relZ = -S.pos.z (behind)
+    // We flip perspective: show station as if we're looking at it from current pos
+    const z=Math.max(0.1, S.pos.z);
+    const sc=3200/(z+8);
+    const ox=S.pos.x*sc;    // station is at 0,0 — we show it offset by our position
+    const oy=-S.pos.y*sc;
+    const lateralErr=Math.sqrt(S.pos.x**2+S.pos.y**2);
+    const isAligned=lateralErr<ALIGN_TOL;
+
+    // Approach corridors
+    ctx.strokeStyle='rgba(0,229,255,0.08)';
+    ctx.lineWidth=1;
+    for (let i=1;i<=3;i++) {
+        const s2=3200/(z+8+i*28);
+        ctx.strokeRect(cx+ox-s2*2.2,cy+oy-s2*2.2,s2*4.4,s2*4.4);
+    }
+
+    ctx.save(); ctx.translate(cx+ox, cy+oy);
+
+    // ── Orion-style docking target: capsule cone + service module ──
+    const r=sc*4.2;
+
+    // Service module (cylinder behind cone)
+    ctx.strokeStyle='rgba(0,200,255,0.45)';
+    ctx.fillStyle  ='rgba(0,40,60,0.35)';
+    ctx.lineWidth=1;
+    const smW=r*.65, smH=r*.45;
+    ctx.fillRect(-smW/2, r*.18, smW, smH);
+    ctx.strokeRect(-smW/2, r*.18, smW, smH);
+
+    // Solar panels (4 small)
+    ctx.strokeStyle='rgba(80,160,220,0.6)';
+    ctx.fillStyle  ='rgba(15,35,70,0.5)';
+    const spW=r*.45, spH=r*.1;
+    [[-r*.7,r*.28],[r*.25,r*.28],[-r*.7,r*.48],[r*.25,r*.48]].forEach(([px,py])=>{
+        ctx.fillRect(px,py,spW,spH); ctx.strokeRect(px,py,spW,spH);
+    });
+
+    // Heat shield base (large flat circle)
+    ctx.strokeStyle='rgba(0,229,255,0.55)';
+    ctx.fillStyle  ='rgba(0,30,50,0.4)';
+    ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.ellipse(0, r*.08, r*.75, r*.15, 0, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+
+    // Capsule cone
+    ctx.strokeStyle=isAligned?'rgba(0,255,180,0.9)':'rgba(0,229,255,0.65)';
+    ctx.fillStyle  ='rgba(0,30,50,0.35)';
+    ctx.lineWidth=isAligned?2.5:1.8;
+    ctx.beginPath();
+    ctx.moveTo(0,-r*.22);
+    ctx.lineTo(-r*.72,r*.08);
+    ctx.lineTo(r*.72,r*.08);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+
+    // Docking probe tip
+    ctx.strokeStyle=isAligned?'var(--gold)':'rgba(0,229,255,0.8)';
+    ctx.lineWidth=isAligned?2.5:1.5;
+    ctx.beginPath(); ctx.moveTo(0,-r*.22); ctx.lineTo(0,-r*.45); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0,-r*.46,Math.max(2,sc*.18),0,Math.PI*2); ctx.stroke();
+
+    // Octagonal docking collar ring
+    ctx.strokeStyle=isAligned?'rgba(255,215,0,0.9)':'rgba(0,200,255,0.6)';
+    ctx.lineWidth=isAligned?2:1.5;
+    ctx.beginPath();
+    for (let a=0;a<=8;a++) {
+        const ang=(a/8)*Math.PI*2;
+        const vx=Math.cos(ang)*r*.55, vy=Math.sin(ang)*r*.55-r*.06;
+        a===0?ctx.moveTo(vx,vy):ctx.lineTo(vx,vy);
+    }
+    ctx.stroke();
+
+    // Alignment ticks
+    ctx.strokeStyle=isAligned?'var(--gold)':'rgba(0,229,255,0.5)';
+    ctx.lineWidth=1.5;
+    [[0,-1],[0,1],[1,0],[-1,0]].forEach(([nx,ny])=>{
+        ctx.beginPath();
+        ctx.moveTo(nx*r*.38,ny*r*.38-r*.06);
+        ctx.lineTo(nx*r*.62,ny*r*.62-r*.06);
+        ctx.stroke();
+    });
+
+    ctx.restore();
+
+    // Pulsing guide lights
+    const pulse=(Math.sin(S.frame*.15)+1)/2;
+    ctx.fillStyle=`rgba(0,229,255,${pulse*.7})`;
+    [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(p=>{
+        ctx.beginPath();
+        ctx.arc(cx+ox+p[0]*sc*3.9,cy+oy+p[1]*sc*3.9,Math.max(1.5,sc*.18),0,Math.PI*2);
+        ctx.fill();
+    });
+
+    // Station label
+    if (S.phase>=3) {
+        ctx.fillStyle=isAligned?'var(--gold)':'rgba(0,229,255,0.7)';
+        ctx.font='bold 9px Courier New';
+        ctx.textAlign='center';
+        ctx.fillText(isAligned?'⊕ DOCK READY':'HOME STATION', cx+ox, cy+oy-sc*4.6-8);
+        ctx.textAlign='left';
+    }
+}
+
+// ── CENTER GUIDE SQUARE ───────────────────────────────────────
+function drawCenterGuide(cx,cy) {
+    const h=GUIDE_HALF;
+    ctx.fillStyle='rgba(255,255,255,0.03)';
+    ctx.fillRect(cx-h,cy-h,h*2,h*2);
+    ctx.strokeStyle='rgba(255,255,255,0.28)';
+    ctx.lineWidth=1.5;
+    ctx.strokeRect(cx-h,cy-h,h*2,h*2);
+    const tick=10;
+    ctx.strokeStyle='rgba(255,255,255,0.62)'; ctx.lineWidth=1.5;
+    [[cx-h,cy-h,1,1],[cx+h,cy-h,-1,1],[cx-h,cy+h,1,-1],[cx+h,cy+h,-1,-1]].forEach(([bx,by,sx,sy])=>{
+        ctx.beginPath();
+        ctx.moveTo(bx,by+sy*tick); ctx.lineTo(bx,by); ctx.lineTo(bx+sx*tick,by);
+        ctx.stroke();
+    });
+    ctx.fillStyle='rgba(255,255,255,0.38)';
+    ctx.beginPath(); ctx.arc(cx,cy,2.5,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,0.20)';
+    ctx.font='9px Courier New'; ctx.textAlign='center';
+    ctx.fillText('ALIGN REF',cx,cy-h-5); ctx.textAlign='left';
+}
+
+// ── HUD ───────────────────────────────────────────────────────
+function drawHUD(cx,cy) {
+    const z=Math.max(0.1,S.pos.z);
+    const sc=3200/(z+8);
+    // In phases 1-2 target is EVA; in phases 3-4 target is station (0,0)
+    const tgX = S.phase<=2 ? evaPos.x : 0;
+    const tgY = S.phase<=2 ? evaPos.y : 0;
+    const ox=(S.pos.x-tgX)*sc;
+    const oy=-(S.pos.y-tgY)*sc;
+    const lateralErr=Math.sqrt((S.pos.x-tgX)**2+(S.pos.y-tgY)**2);
+    const isAligned=lateralErr<(S.phase<=2?EVA_TOL:ALIGN_TOL);
+
+    // Crosshair at target
+    ctx.strokeStyle=isAligned?'#fff':(S.phase<=2?'var(--gold)':'var(--ng)');
+    ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(cx+ox-26,cy+oy); ctx.lineTo(cx+ox-11,cy+oy);
+    ctx.moveTo(cx+ox+26,cy+oy); ctx.lineTo(cx+ox+11,cy+oy);
+    ctx.moveTo(cx+ox,cy+oy-26); ctx.lineTo(cx+ox,cy+oy-11);
+    ctx.moveTo(cx+ox,cy+oy+26); ctx.lineTo(cx+ox,cy+oy+11);
+    ctx.stroke();
+    if (isAligned) {
+        ctx.strokeRect(cx+ox-14,cy+oy-14,28,28);
+        ctx.strokeStyle='rgba(255,255,255,0.28)';
+        const b=155;
+        ctx.beginPath();
+        ctx.moveTo(cx-b,cy-b+22); ctx.lineTo(cx-b,cy-b); ctx.lineTo(cx-b+22,cy-b);
+        ctx.moveTo(cx+b,cy-b+22); ctx.lineTo(cx+b,cy-b); ctx.lineTo(cx+b-22,cy-b);
+        ctx.moveTo(cx-b,cy+b-22); ctx.lineTo(cx-b,cy+b); ctx.lineTo(cx-b+22,cy+b);
+        ctx.moveTo(cx+b,cy+b-22); ctx.lineTo(cx+b,cy+b); ctx.lineTo(cx+b-22,cy+b);
+        ctx.stroke();
+    }
+
+    // Velocity vector (amber)
+    const vx=cx+(S.pos.x-tgX+S.vel.x*55)*sc;
+    const vy=cy+(-(S.pos.y-tgY)-S.vel.y*55)*sc;
+    ctx.strokeStyle='var(--amb)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.arc(vx,vy,6,0,Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(vx-8,vy); ctx.lineTo(vx+8,vy); ctx.moveTo(vx,vy-8); ctx.lineTo(vx,vy+8); ctx.stroke();
+
+    // Trajectory
+    const midZ=Math.max(0.1,S.pos.z+S.vel.z*55);
+    const msc=3200/(midZ+8);
+    const midX=cx+(S.pos.x-tgX+S.vel.x*55)*msc;
+    const midY=cy+(-(S.pos.y-tgY)-S.vel.y*55)*msc;
+    ctx.beginPath();
+    ctx.strokeStyle='rgba(0,229,255,0.35)'; ctx.setLineDash([4,5]); ctx.lineWidth=1;
+    ctx.moveTo(cx,cy); ctx.quadraticCurveTo(midX,midY,cx+ox,cy+oy); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Fuel bar
+    const fw=130,fh=6,fx=18,fy=canvas.height-38;
+    const fp=Math.max(0,S.fuel)/100;
+    const fc=fp>.4?'var(--ng)':fp>.2?'var(--amb)':'var(--red)';
+    ctx.fillStyle='rgba(0,5,10,.85)'; ctx.fillRect(fx,fy,fw,fh);
+    ctx.fillStyle=fc; ctx.fillRect(fx,fy,fw*fp,fh);
+    ctx.strokeStyle='#0a1a2a'; ctx.lineWidth=1; ctx.strokeRect(fx,fy,fw,fh);
+    ctx.fillStyle=fc; ctx.font='9px Courier New';
+    ctx.fillText(`FUEL ${S.fuel.toFixed(0)}%`,fx,fy-4);
+
+    // Rescue hold bar (phase 2 only)
+    if (S.phase===2) {
+        const rp=S.rescueHold/RESCUE_HOLD;
+        const pulse=(Math.sin(S.frame*.2)+1)/2;
+        ctx.fillStyle='rgba(0,5,10,.85)'; ctx.fillRect(fx,fy-20,fw,5);
+        ctx.fillStyle=`rgba(255,215,0,${0.8+pulse*0.2})`; ctx.fillRect(fx,fy-20,fw*rp,5);
+        ctx.strokeStyle='#2a1a00'; ctx.lineWidth=1; ctx.strokeRect(fx,fy-20,fw,5);
+        ctx.fillStyle='rgba(255,215,0,0.8)'; ctx.font='9px Courier New';
+        ctx.fillText(`RESCUE LOCK ${(rp*100).toFixed(0)}%`,fx,fy-24);
+    }
+
+    // Survivor indicator (phases 3+)
+    if (S.survivorAboard) {
+        const pulse=(Math.sin(S.frame*.12)+1)/2;
+        ctx.fillStyle=`rgba(0,255,65,${0.6+pulse*0.35})`;
+        ctx.font='bold 10px Courier New';
+        ctx.textAlign='right';
+        ctx.fillText('★ SURVIVOR ABOARD',canvas.width-18,canvas.height-22);
+        ctx.textAlign='left';
+    }
+}
+
+// ── DIRECTION ARROW (shows heading direction) ─────────────────
+function drawDirectionArrow(cx,cy) {
+    const label=S.phase<=2?'OUTBOUND ▶':'◀ RETURN';
+    const col  =S.phase<=2?'rgba(0,229,255,0.5)':'rgba(0,255,65,0.5)';
+    ctx.fillStyle=col; ctx.font='bold 9px Courier New';
+    ctx.textAlign='center';
+    ctx.fillText(label,cx,canvas.height-22);
+    ctx.textAlign='left';
+}
+
+// ── DEBRIS WARNING BORDER ─────────────────────────────────────
+function drawDebrisWarningBorder(cx,cy) {
+    const p=(Math.sin(S.frame*.35)+1)/2;
+    ctx.strokeStyle=`rgba(255,80,0,${.35+p*.5})`;
+    ctx.lineWidth=3;
+    ctx.strokeRect(3,3,canvas.width-6,canvas.height-6);
+}
+
+// ── THRUSTER HINTS ────────────────────────────────────────────
+function drawThrHints(cx,cy) {
+    if (!S.active||S.fuel<=0) return;
+    const m=90; ctx.fillStyle='rgba(255,255,255,.65)'; ctx.font='9px monospace';
+    if (keys['KeyS']||keys['ArrowDown']) { ctx.beginPath(); ctx.moveTo(cx,cy-m); ctx.lineTo(cx-8,cy-m-16); ctx.lineTo(cx+8,cy-m-16); ctx.fill(); ctx.fillText("↑RCS",cx-10,cy-m-20); }
+    if (keys['KeyW']||keys['ArrowUp'])   { ctx.beginPath(); ctx.moveTo(cx,cy+m); ctx.lineTo(cx-8,cy+m+16); ctx.lineTo(cx+8,cy+m+16); ctx.fill(); ctx.fillText("↓RCS",cx-10,cy+m+30); }
+    if (keys['KeyD']||keys['ArrowRight']) { ctx.beginPath(); ctx.moveTo(cx-m,cy); ctx.lineTo(cx-m-16,cy-8); ctx.lineTo(cx-m-16,cy+8); ctx.fill(); ctx.fillText("←RCS",cx-m-38,cy+4); }
+    if (keys['KeyA']||keys['ArrowLeft']) { ctx.beginPath(); ctx.moveTo(cx+m,cy); ctx.lineTo(cx+m+16,cy-8); ctx.lineTo(cx+m+16,cy+8); ctx.fill(); ctx.fillText("→RCS",cx+m+20,cy+4); }
+    if (keys['KeyQ']) { ctx.fillText(S.phase<=2?"⊕ FWD BURN":"⊕ RETRO",cx-24,cy-m-34); }
+    if (keys['KeyE']) { ctx.fillText(S.phase<=2?"⊖ RETRO":"⊖ FWD BURN",cx-30,cy-m-34); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SIDE VIEW
+// ═══════════════════════════════════════════════════════════════
+function drawSideView(cx,cy) {
+    const zoom=3.2;
+    const sX=cx-180;    // home station on left
+    const evaX=cx+200;  // EVA zone on right (approx)
+    const shipX=sX+(S.pos.z*zoom);
+    const shipY=cy-S.pos.y*zoom;
+
+    // Grid
+    ctx.strokeStyle='rgba(0,180,255,0.05)'; ctx.lineWidth=1;
+    for (let x=0;x<canvas.width;x+=50) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
+    for (let y=0;y<canvas.height;y+=50) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); }
+
+    // Home station (left)
+    ctx.strokeStyle='rgba(0,200,255,0.5)'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.moveTo(sX,cy-80); ctx.lineTo(sX,cy+80); ctx.stroke();
+    ctx.fillStyle='rgba(0,200,255,0.4)'; ctx.font='8px Courier New';
+    ctx.fillText('HOME',sX-12,cy-83);
+
+    // EVA zone (right)
+    const pulse=(Math.sin(beaconT)+1)/2;
+    ctx.strokeStyle=`rgba(255,215,0,${0.3+pulse*0.4})`; ctx.lineWidth=1.5;
+    ctx.setLineDash([5,4]);
+    ctx.beginPath(); ctx.moveTo(evaX,cy-60); ctx.lineTo(evaX,cy+60); ctx.stroke();
+    ctx.setLineDash([]);
+    if (!S.survivorAboard) {
+        ctx.fillStyle=`rgba(255,215,0,${0.7+pulse*0.2})`; ctx.font='8px Courier New';
+        ctx.fillText('EVA',evaX+3,cy-63);
+    }
+
+    // Debris
+    const allD=[...debrisOut,...debrisCloud];
+    for (const d of allD) {
+        const dx=sX+d.pos.z*zoom;
+        const dy=cy-d.pos.y*zoom;
+        ctx.save(); ctx.translate(dx,dy); ctx.rotate(d.rot);
+        if (d.type==='asteroid') {
+            const sz=d.r*0.5;
+            ctx.strokeStyle='rgba(100,140,75,0.45)'; ctx.lineWidth=0.8;
+            ctx.beginPath();
+            d.verts.forEach((v,i)=>{ i===0?ctx.moveTo(v.x*sz*.09,v.y*sz*.09):ctx.lineTo(v.x*sz*.09,v.y*sz*.09); });
+            ctx.closePath(); ctx.stroke();
+        } else {
+            const sz=d.size*0.4;
+            ctx.strokeStyle='rgba(145,125,85,0.35)'; ctx.lineWidth=0.5;
+            ctx.strokeRect(-sz,-sz*.4,sz*2,sz*.8);
+        }
+        ctx.restore();
+    }
+
+    // Hazard sats
+    for (const hs of hazardSats) {
+        const hx=sX+hs.pos.z*zoom, hy=cy-hs.pos.y*zoom;
+        ctx.save(); ctx.translate(hx,hy); ctx.rotate(hs.rot);
+        ctx.strokeStyle='rgba(190,155,70,0.55)'; ctx.lineWidth=1.2;
+        ctx.strokeRect(-9,-3.5,18,7); ctx.strokeRect(-16,-2.5,5.5,5.5); ctx.strokeRect(10.5,-2.5,5.5,5.5);
+        ctx.restore();
+    }
+
+    // Docking axis
+    ctx.strokeStyle='rgba(0,200,255,0.12)'; ctx.lineWidth=1; ctx.setLineDash([10,5]);
+    ctx.beginPath(); ctx.moveTo(0,cy); ctx.lineTo(canvas.width,cy); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Y deviation
+    if (Math.abs(shipY-cy)>2) {
+        const le=Math.abs(S.pos.y);
+        ctx.strokeStyle=le<ALIGN_TOL?'rgba(255,255,255,.4)':'rgba(255,80,80,.4)';
+        ctx.lineWidth=1; ctx.setLineDash([3,5]);
+        ctx.beginPath(); ctx.moveTo(shipX,cy); ctx.lineTo(shipX,shipY); ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    // Range ticks
+    ctx.setLineDash([7,5]);
+    ctx.strokeStyle='rgba(255,255,255,0.15)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(shipX,shipY); ctx.lineTo(sX,shipY); ctx.stroke();
+    ctx.setLineDash([]);
+    for (let d=20;d<S.pos.z;d+=20) {
+        const tx=sX+d*zoom;
+        ctx.strokeStyle='rgba(0,200,255,0.28)'; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.moveTo(tx,shipY-5); ctx.lineTo(tx,shipY+5); ctx.stroke();
+        if (d%60===0) { ctx.fillStyle='rgba(0,200,255,.4)'; ctx.font='8px Courier New'; ctx.fillText(`${d}m`,tx-8,shipY+14); }
+    }
+
+    // Vel arrow
+    const vAL=S.vel.z*zoom*70;
+    ctx.strokeStyle='var(--amb)'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(shipX,shipY-22); ctx.lineTo(shipX+vAL,shipY-22); ctx.stroke();
+    if (Math.abs(vAL)>3) {
+        const ad=vAL>0?1:-1;
+        ctx.fillStyle='var(--amb)';
+        ctx.beginPath(); ctx.moveTo(shipX+vAL+ad*5,shipY-22); ctx.lineTo(shipX+vAL-ad*4,shipY-27); ctx.lineTo(shipX+vAL-ad*4,shipY-17); ctx.fill();
+    }
+    ctx.fillStyle='var(--amb)'; ctx.font='9px Courier New';
+    ctx.fillText(`VZ:${(S.vel.z*10).toFixed(2)}`,shipX-2,shipY-27);
+
+    // Ship body (rescue capsule silhouette)
+    ctx.save(); ctx.translate(shipX,shipY);
+    const le2=Math.abs(S.pos.y);
+    ctx.strokeStyle=le2<ALIGN_TOL?'#fff':'var(--ng)'; ctx.lineWidth=2;
+    // Capsule cone side profile
+    ctx.beginPath(); ctx.moveTo(14,0); ctx.lineTo(-12,-10); ctx.lineTo(-12,10); ctx.closePath(); ctx.stroke();
+    ctx.strokeRect(-22,-8,10,16);
+    // Survivor indicator dot
+    if (S.survivorAboard) {
+        ctx.fillStyle='var(--gold)';
+        ctx.beginPath(); ctx.arc(0,0,4,0,Math.PI*2); ctx.fill();
+    }
+    // Thruster indicators
+    ctx.fillStyle='rgba(255,255,255,0.75)';
+    if (keys['KeyW']||keys['ArrowUp'])   { ctx.beginPath(); ctx.moveTo(-8,12); ctx.lineTo(-4,26); ctx.lineTo(0,12); ctx.fill(); }
+    if (keys['KeyS']||keys['ArrowDown']) { ctx.beginPath(); ctx.moveTo(-8,-12); ctx.lineTo(-4,-26); ctx.lineTo(0,-12); ctx.fill(); }
+    if (keys['KeyD']||keys['ArrowRight']) { ctx.beginPath(); ctx.moveTo(-24,-6); ctx.lineTo(-38,0); ctx.lineTo(-24,6); ctx.fill(); }
+    if (keys['KeyA']||keys['ArrowLeft']) { ctx.beginPath(); ctx.moveTo(16,-5); ctx.lineTo(28,0); ctx.lineTo(16,5); ctx.fill(); }
+    ctx.restore();
+
+    // Labels
+    ctx.fillStyle='#fff'; ctx.font='10px Courier New';
+    ctx.fillText(`RANGE: ${S.pos.z.toFixed(1)}M`,shipX,shipY+30);
+    // Phase indicator
+    ctx.fillStyle=S.phase<=2?'rgba(0,229,255,.6)':'rgba(0,255,65,.6)';
+    ctx.font='9px Courier New';
+    ctx.fillText(S.phase<=2?'▶ OUTBOUND':'◀ RETURN',18,canvas.height-22);
+
+    // Fuel bar
+    const fp=Math.max(0,S.fuel)/100;
+    const fc=fp>.4?'var(--ng)':fp>.2?'var(--amb)':'var(--red)';
+    ctx.fillStyle='rgba(0,5,10,.85)'; ctx.fillRect(18,canvas.height-38,130,6);
+    ctx.fillStyle=fc; ctx.fillRect(18,canvas.height-38,130*fp,6);
+    ctx.strokeStyle='#0a1a2a'; ctx.lineWidth=1; ctx.strokeRect(18,canvas.height-38,130,6);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LOOP
+// ═══════════════════════════════════════════════════════════════
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+init();
+</script>
+</body>
+</html>
