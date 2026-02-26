@@ -2,6 +2,8 @@
 
 **DockingSim.JS** is a high-fidelity, retro-vector orbital proximity operations simulator. Inspired by the **Universal Docking Display (UDD)** used during the historic **STS-114** Space Shuttle mission, this program is designed to preserve aerospace history and train the next generation of pilots in the delicate art of orbital docking.
 
+**[▶ Try the Live Web View Now](https://gamedev44.github.io/DockingSim/)**
+
 ---
 
 ## 📑 Table of Contents
@@ -102,7 +104,8 @@ git clone https://github.com/gamedev44/DockingSim.git
 
 ## 📋 Safety Checklist
 
-<img width="2953" height="1796" alt="image" src="https://github.com/user-attachments/assets/095f219c-e2d7-4201-af8f-15d965c06852" />
+<img width="883" height="536" alt="image" src="https://github.com/user-attachments/assets/ab8c0930-99a1-48bc-af3c-e9e60745453c" />
+
 
 ---
 
